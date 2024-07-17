@@ -1,20 +1,16 @@
-# Kiosk Auto-Logon Remediation Script
-# This script sets the auto-logon registry keys for kiosk PCs.
+# Kiosk Auto-Logon Detection Script
+# This script checks if the auto-logon registry keys are set correctly for kiosk PCs.
+# It will trigger remediation if EITHER key is missing or incorrect.
 
 $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 
-try {
-    # Set AutoAdminLogon to 1 (enable auto-logon)
-    Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1" -Type String -Force
+$autoAdminLogon = (Get-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -ErrorAction SilentlyContinue).AutoAdminLogon
+$defaultUsername = (Get-ItemProperty -Path $winlogonPath -Name "DefaultUsername" -ErrorAction SilentlyContinue).DefaultUsername
 
-    # Set the DefaultUsername to kioskUser0
-    Set-ItemProperty -Path $winlogonPath -Name "DefaultUsername" -Value "kioskUser0" -Type String -Force
-
-    Write-Output "Kiosk auto-logon has been configured successfully."
-    exit 0  # Success
-}
-catch {
-    $errorMessage = $_.Exception.Message
-    Write-Output "Failed to configure kiosk auto-logon: $errorMessage"
-    exit 1  # Failure
+if ($autoAdminLogon -ne "1" -or $defaultUsername -ne "kioskUser0") {
+    Write-Output "Kiosk auto-logon is not correctly configured. Remediation needed."
+    exit 1  # Non-compliant, will trigger remediation
+} else {
+    Write-Output "Kiosk auto-logon is correctly configured."
+    exit 0  # Compliant
 }
