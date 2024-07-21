@@ -1,122 +1,112 @@
-# Public Kiosk Keyboard Filter Script
-# This script configures the Keyboard Filter feature to prevent unauthorized access
-# to system settings and keep users within intended applications on public kiosk PCs.
+# Keyboard Filter Configuration Script for Kiosk Devices to block common key combos
+# License: MIT (https://opensource.org/licenses/MIT)
 
-# Define log file path
-$logFile = "C:\Windows\Logs\KioskKeyboardFilterLog.txt"
+param (
+    [String] $ComputerName
+)
 
-# Function to write log messages
+$logFile = "C:\Windows\Logs\KeyboardFilterSetup.log"
+
 function Write-Log {
-    param(
-        [string]$Message
-    )
+    param($message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$timestamp - $Message" | Out-File -FilePath $logFile -Append
-    Write-Host $Message
+    "$timestamp - $message" | Out-File -FilePath $logFile -Append
+    Write-Host $message
 }
 
-# Function to check if Keyboard Filter feature is installed
-function Check-KeyboardFilter {
-    $feature = Get-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter"
-    return $feature.State -eq "Enabled"
-}
+$CommonParams = @{"namespace"="root\standardcimv2\embedded"}
+$CommonParams += $PSBoundParameters
 
-# Function to install Keyboard Filter feature
-function Install-KeyboardFilter {
-    Write-Log "Installing Keyboard Filter feature..."
-    try {
-        Enable-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter" -NoRestart
-        Write-Log "Keyboard Filter feature installed successfully."
-    }
-    catch {
-        Write-Log "Error installing Keyboard Filter feature: $_"
-    }
-}
-
-# Function to enable predefined key filter
-function Enable-PredefinedKey($Id) {
-    try {
-        $predefined = Get-WmiObject -Namespace "root\standardcimv2\embedded" -Class WEKF_PredefinedKey |
-            Where-Object { $_.Id -eq $Id }
-        
-        if ($predefined) {
-            $predefined.Enabled = 1
-            $predefined.Put() | Out-Null
-            Write-Log "Enabled predefined key filter: $Id"
-        } else {
-            Write-Log "Error: $Id is not a valid predefined key"
+function Enable-Predefined-Key($Id) {
+    $predefined = Get-WmiObject -class WEKF_PredefinedKey @CommonParams |
+        where {
+            $_.Id -eq "$Id"
         }
-    }
-    catch {
-        Write-Log "Error enabling predefined key filter $Id: $_"
+    if ($predefined) {
+        $predefined.Enabled = 1
+        $predefined.Put() | Out-Null
+        Write-Log "Enabled Predefined Key: $Id"
+    } else {
+        Write-Log "Warning: $Id is not a valid predefined key"
     }
 }
 
-# Function to enable custom key filter
-function Enable-CustomKey($Id) {
-    try {
-        $custom = Get-WmiObject -Namespace "root\standardcimv2\embedded" -Class WEKF_CustomKey |
-            Where-Object { $_.Id -eq $Id }
-        
-        if ($custom) {
-            $custom.Enabled = 1
-            $custom.Put() | Out-Null
-            Write-Log "Enabled custom key filter: $Id"
-        } else {
-            Set-WmiInstance -Namespace "root\standardcimv2\embedded" -Class WEKF_CustomKey -Arguments @{Id=$Id} | Out-Null
-            Write-Log "Added custom key filter: $Id"
+function Enable-Custom-Key($Id) {
+    $custom = Get-WmiObject -class WEKF_CustomKey @CommonParams |
+        where {
+            $_.Id -eq "$Id"
         }
-    }
-    catch {
-        Write-Log "Error enabling custom key filter $Id: $_"
+    if ($custom) {
+        $custom.Enabled = 1
+        $custom.Put() | Out-Null
+        Write-Log "Enabled Custom Key: $Id"
+    } else {
+        Set-WmiInstance -class WEKF_CustomKey -argument @{Id="$Id"} @CommonParams | Out-Null
+        Write-Log "Added Custom Key: $Id"
     }
 }
 
-# Main script execution
-Write-Log "Script execution started"
+function Enable-Scancode($Modifiers, [int]$Code) {
+    $scancode = Get-WmiObject -class WEKF_Scancode @CommonParams |
+        where {
+            ($_.Modifiers -eq $Modifiers) -and ($_.Scancode -eq $Code)
+        }
+    if($scancode) {
+        $scancode.Enabled = 1
+        $scancode.Put() | Out-Null
+        Write-Log "Enabled Scancode: $Modifiers+$($Code.ToString("X4"))"
+    } else {
+        Set-WmiInstance -class WEKF_Scancode -argument @{Modifiers="$Modifiers"; Scancode=$Code} @CommonParams | Out-Null
+        Write-Log "Added Scancode: $Modifiers+$($Code.ToString("X4"))"
+    }
+}
 
 try {
-    if (-not (Check-KeyboardFilter)) {
-        Write-Log "Keyboard Filter feature not found. Installing..."
-        Install-KeyboardFilter
-    } else {
-        Write-Log "Keyboard Filter feature is already installed."
+    Write-Log "Starting Keyboard Filter Setup"
+
+    # Check if Keyboard Filter feature is installed
+    $feature = Get-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter"
+    if ($feature.State -ne "Enabled") {
+        Write-Log "Keyboard Filter feature not installed. Installing now..."
+        $result = Enable-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter" -All -NoRestart
+        if ($result.RestartNeeded) {
+            Write-Log "Restart required after installing Keyboard Filter feature. Script will exit."
+            exit 3 # Exit code 3 indicates restart needed
+        }
+    }
+    Write-Log "Keyboard Filter feature is installed"
+
+    # Configure Keyboard Filter settings
+    $settings = Get-WmiObject -Namespace "root\standardcimv2\embedded" -Class WEKF_Settings
+    $settings.BreakoutKeyScanCode = 0  # Disable the breakout key
+    $settings.Put() | Out-Null
+    Write-Log "Configured Keyboard Filter settings"
+
+    # Enable predefined key filters
+    $predefinedKeys = @(
+        "Windows", "Ctrl+Alt+Del", "Ctrl+Esc", "Alt+Tab", "Alt+Esc",
+        "Ctrl+Shift+Esc", "Win+L", "Win+R", "Win+E", "Win+X", "Win+D"
+    )
+    foreach ($key in $predefinedKeys) {
+        Enable-Predefined-Key $key
     }
 
-    # Enable critical keyboard filters
-    Write-Log "Configuring keyboard filters for public kiosk security..."
+    # Enable custom key filters
+    $customKeys = @(
+        "Ctrl+V", "Ctrl+C", "Ctrl+X", "Ctrl+A", "Ctrl+Z", 
+        "Win+M", "Win+P", "Win+S", "Win+I"
+    )
+    foreach ($key in $customKeys) {
+        Enable-Custom-Key $key
+    }
 
-    # System-level access prevention
-    Enable-PredefinedKey "Ctrl+Alt+Del"
-    Enable-PredefinedKey "Windows"
-    Enable-PredefinedKey "Ctrl+Esc"
-    Enable-CustomKey "Win+X"  # Quick Link menu
-    Enable-CustomKey "Win+I"  # Settings
-    Enable-CustomKey "Win+R"  # Run dialog
-    Enable-CustomKey "Ctrl+Shift+Esc"  # Task Manager
+    # Enable scancode filters (example)
+    Enable-Scancode "Ctrl" 37
 
-    # Application switching and closing prevention
-    Enable-PredefinedKey "Alt+Tab"
-    Enable-PredefinedKey "Alt+Esc"
-    Enable-CustomKey "Alt+F4"  # Close window
-
-    # Desktop access prevention
-    Enable-CustomKey "Win+D"  # Show/Hide desktop
-    Enable-CustomKey "Win+M"  # Minimize all windows
-
-    # Other potentially disruptive shortcuts
-    Enable-CustomKey "Win+L"  # Lock computer
-    Enable-CustomKey "Win+E"  # File Explorer
-    Enable-CustomKey "Win+S"  # Search
-    Enable-CustomKey "Win+A"  # Action Center
-    Enable-CustomKey "PrtScn"  # Print Screen
-    Enable-CustomKey "Win+PrtScn"  # Save screenshot
-    Enable-CustomKey "Win+Shift+S"  # Snipping tool
-
-    Write-Log "Keyboard filter configuration for public kiosk completed successfully."
+    Write-Log "Keyboard Filter configuration completed successfully"
+    exit 0 # Success
 }
 catch {
-    Write-Log "An error occurred during script execution: $_"
+    Write-Log "Error occurred during setup: $_"
+    exit 1 # Failure
 }
-
-Write-Log "Script execution finished"
