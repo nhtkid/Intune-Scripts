@@ -1,4 +1,4 @@
-# Streamlined Autopilot Kiosk Auto-Logon Setup Script
+# Corrected Autopilot Kiosk Auto-Logon Setup Script
 # This script checks for auto-logon registry keys and creates/updates them if needed during Autopilot.
 
 $logFile = "C:\Windows\Logs\KioskAutoLogon.log"
@@ -21,8 +21,8 @@ try {
     } else {
         Write-Log "Auto-logon not correctly configured. Setting required keys."
         
-        New-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1" -PropertyType String -Force
-        New-ItemProperty -Path $winlogonPath -Name "DefaultUsername" -Value "kioskUser0" -PropertyType String -Force
+        Set-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -Value "1" -Type String -Force
+        Set-ItemProperty -Path $winlogonPath -Name "DefaultUsername" -Value "kioskUser0" -Type String -Force
         
         Write-Log "Created/Updated AutoAdminLogon and DefaultUsername keys."
     }
