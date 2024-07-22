@@ -1,4 +1,4 @@
-# Corrected Autopilot Kiosk Auto-Logon Setup Script
+# Pre-Logon Autopilot Kiosk Auto-Logon Setup Script
 # This script checks for auto-logon registry keys and creates/updates them if needed during Autopilot.
 
 $logFile = "C:\Windows\Logs\KioskAutoLogon.log"
@@ -9,8 +9,18 @@ function Write-Log {
     "$timestamp - $message" | Out-File -FilePath $logFile -Append
 }
 
+function Test-RunningAsSystem {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    return $currentUser.IsSystem
+}
+
 try {
     Write-Log "Starting Autopilot Kiosk Auto-Logon Setup"
+
+    if (-not (Test-RunningAsSystem)) {
+        Write-Log "Script is not running in SYSTEM context. Exiting."
+        exit 1
+    }
 
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
     $autoAdminLogon = (Get-ItemProperty -Path $winlogonPath -Name "AutoAdminLogon" -ErrorAction SilentlyContinue).AutoAdminLogon
