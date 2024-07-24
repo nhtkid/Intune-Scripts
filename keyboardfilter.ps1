@@ -1,7 +1,7 @@
-# Simplified Keyboard Filter Configuration Script for Kiosk Devices
+# Revised Keyboard Filter Configuration Script for Kiosk Devices
 
 # Log file path
-$LogPath = "C:\Windows\Logs\KeyboardFilterBlock.log"
+$LogPath = "C:\Windows\Logs\KeyboardFilterConfig.log"
 
 # Function to write to log file
 function Write-KioskLog {
@@ -10,11 +10,14 @@ function Write-KioskLog {
     "$timestamp - $Message" | Out-File -FilePath $LogPath -Append
 }
 
+# Common parameters for WMI calls
+$CommonParams = @{ "namespace" = "root\standardcimv2\embedded" }
+
 # Function to enable predefined keys
-function Enable-Predefined-Key {
-    param ([string]$Id)
-    $predefined = Get-WmiObject -Namespace root\standardcimv2\embedded -Class WEKF_PredefinedKey | 
-                  Where-Object { $_.Id -eq $Id }
+function Enable-Predefined-Key($Id) {
+    $predefined = Get-WmiObject -class WEKF_PredefinedKey @CommonParams |
+        Where-Object { $_.Id -eq $Id }
+    
     if ($predefined) {
         $predefined.Enabled = 1
         $predefined.Put() | Out-Null
@@ -22,6 +25,20 @@ function Enable-Predefined-Key {
     } else {
         Write-KioskLog "WARNING: $Id is not a valid predefined key"
     }
+}
+
+# Function to enable custom keys
+function Enable-Custom-Key($Id) {
+    $custom = Get-WmiObject -class WEKF_CustomKey @CommonParams |
+        Where-Object { $_.Id -eq $Id }
+    
+    if ($custom) {
+        $custom.Enabled = 1
+        $custom.Put() | Out-Null
+    } else {
+        Set-WmiInstance -class WEKF_CustomKey -argument @{Id=$Id} @CommonParams | Out-Null
+    }
+    Write-KioskLog "Enabled custom key: $Id"
 }
 
 # Start logging
@@ -34,19 +51,26 @@ try {
     Write-KioskLog "Keyboard Filter feature enabled successfully"
 
     # Configure Keyboard Filter settings
-    $settings = Get-WmiObject -Namespace root\standardcimv2\embedded -Class WEKF_Settings
-    $settings.IsAdminConfigured = $true
-    $settings.IsFilterEnabled = $true
-    $settings.Put() | Out-Null
-    Write-KioskLog "Configured Keyboard Filter settings"
+    Write-KioskLog "Configuring Keyboard Filter settings"
+    Get-WmiObject -class WEKF_Settings @CommonParams -ErrorAction Stop
 
-    # Enable specific key combinations
-    $keysToBlock = @("Windows", "Ctrl+Alt+Del", "Ctrl+Esc", "Ctrl+Shift+Esc", "Alt+Tab", "Alt+Esc")
+    # Enable specific predefined key combinations
+    $keysToBlock = @(
+        "Windows", "Ctrl+Alt+Del", "Ctrl+Esc", "Ctrl+Shift+Esc",
+        "Alt+Tab", "Alt+Esc", "Ctrl+Tab"
+    )
     foreach ($key in $keysToBlock) {
         Enable-Predefined-Key $key
     }
 
+    # Enable custom keys
+    $customKeysToBlock = @("Ctrl+V", "Ctrl+C", "Ctrl+X")
+    foreach ($key in $customKeysToBlock) {
+        Enable-Custom-Key $key
+    }
+
     # Disable the breakout key
+    $settings = Get-WmiObject -class WEKF_Settings @CommonParams
     $settings.BreakoutKeyScanCode = 0
     $settings.Put() | Out-Null
     Write-KioskLog "Disabled breakout key"
@@ -61,7 +85,6 @@ try {
     Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "RestartAfterKeyboardFilter" `
                            -Description "Restart after Keyboard Filter configuration" -Principal $principal
     Write-KioskLog "Scheduled restart in 1 minute"
-
 } catch {
     Write-KioskLog "ERROR: Script failed with the following error: $_"
     exit 1
