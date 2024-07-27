@@ -1,8 +1,4 @@
-<#
-.Synopsis
-    This script enables keyboard filter rules through Windows PowerShell on the local computer.
-    It also logs the execution to a file in C:\Windows\logs.
-#>
+# This script will block key combinations. It will not work with Home or Pro edition.
 
 # Define the log file path
 $logFile = "C:\Windows\logs\keyboard_filter_script.log"
@@ -15,45 +11,57 @@ function Write-Log($message) {
 
 # Function to enable a predefined key
 function Enable-Predefined-Key($Id) {
-    $predefined = Get-WMIObject -class WEKF_PredefinedKey -Namespace root\standardcimv2\embedded |
-            where { $_.Id -eq "$Id" }
+    try {
+        $predefined = Get-WMIObject -class WEKF_PredefinedKey -Namespace root\standardcimv2\embedded |
+                where { $_.Id -eq "$Id" }
 
-    if ($predefined) {
-        $predefined.Enabled = 1
-        $predefined.Put() | Out-Null
-        Write-Log "Enabled $Id"
-    } else {
-        Write-Log "$Id is not a valid predefined key"
+        if ($predefined) {
+            $predefined.Enabled = 1
+            $predefined.Put() | Out-Null
+            Write-Log "Blocked $Id"
+        } else {
+            Write-Log "$Id is not a valid predefined key"
+        }
+    } catch {
+        Write-Log "Error blocking predefined key $Id: $_"
     }
 }
 
 # Function to enable a custom key
 function Enable-Custom-Key($Id) {
-    $custom = Get-WMIObject -class WEKF_CustomKey -Namespace root\standardcimv2\embedded |
-            where { $_.Id -eq "$Id" }
+    try {
+        $custom = Get-WMIObject -class WEKF_CustomKey -Namespace root\standardcimv2\embedded |
+                where { $_.Id -eq "$Id" }
 
-    if ($custom) {
-        $custom.Enabled = 1
-        $custom.Put() | Out-Null
-        Write-Log "Enabled Custom Filter $Id."
-    } else {
-        Set-WMIInstance -class WEKF_CustomKey -argument @{Id="$Id"} -Namespace root\standardcimv2\embedded | Out-Null
-        Write-Log "Added Custom Filter $Id."
+        if ($custom) {
+            $custom.Enabled = 1
+            $custom.Put() | Out-Null
+            Write-Log "Blocked Custom Filter $Id."
+        } else {
+            Set-WMIInstance -class WEKF_CustomKey -argument @{Id="$Id"} -Namespace root\standardcimv2\embedded | Out-Null
+            Write-Log "Added Custom Filter $Id."
+        }
+    } catch {
+        Write-Log "Error blocking custom key $Id: $_"
     }
 }
 
 # Function to enable a scancode
 function Enable-Scancode($Modifiers, [int]$Code) {
-    $scancode = Get-WMIObject -class WEKF_Scancode -Namespace root\standardcimv2\embedded |
-            where { ($_.Modifiers -eq $Modifiers) -and ($_.Scancode -eq $Code) }
+    try {
+        $scancode = Get-WMIObject -class WEKF_Scancode -Namespace root\standardcimv2\embedded |
+                where { ($_.Modifiers -eq $Modifiers) -and ($_.Scancode -eq $Code) }
 
-    if($scancode) {
-        $scancode.Enabled = 1
-        $scancode.Put() | Out-Null
-        Write-Log "Enabled Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code
-    } else {
-        Set-WMIInstance -class WEKF_Scancode -argument @{Modifiers="$Modifiers"; Scancode=$Code} -Namespace root\standardcimv2\embedded | Out-Null
-        Write-Log "Added Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code
+        if($scancode) {
+            $scancode.Enabled = 1
+            $scancode.Put() | Out-Null
+            Write-Log "Blocked Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code
+        } else {
+            Set-WMIInstance -class WEKF_Scancode -argument @{Modifiers="$Modifiers"; Scancode=$Code} -Namespace root\standardcimv2\embedded | Out-Null
+            Write-Log "Added Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code
+        }
+    } catch {
+        Write-Log "Error blocking scancode $Modifiers+$Code: $_"
     }
 }
 
@@ -67,7 +75,6 @@ if ($keyboardFilterFeature.State -ne "Enabled") {
 
     if ($result.RestartNeeded -eq $true) {
         Write-Log "Restart is needed after installing Keyboard Filter feature."
-        Restart-Computer -Force
     }
 } else {
     Write-Log "Keyboard Filter feature is already installed."
@@ -78,15 +85,16 @@ Write-Log "Script started"
 
 # Enable the specified key combinations
 Enable-Predefined-Key "Ctrl+Alt+Del"
+Enable-Predefined-Key "Windows"
+Enable-Predefined-Key "Escape"
+Enable-Predefined-Key "Alt+F4"
 Enable-Predefined-Key "Ctrl+Esc"
+Enable-Predefined-Key "Alt+Tab"
 Enable-Custom-Key "Ctrl+V"
-Enable-Custom-Key "Numpad0"
-Enable-Custom-Key "Shift+Numpad1"
-Enable-Custom-Key "%"
 Enable-Scancode "Ctrl" 37
 
 # Block the Windows key
-Enable-Predefined-Key "Windows"
+
 
 # Log that the script has finished
 Write-Log "Script finished"
