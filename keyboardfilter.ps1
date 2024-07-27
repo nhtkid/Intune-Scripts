@@ -1,7 +1,7 @@
 # This script will block key combinations. It will not work with Home or Pro edition.
 
 # Define the log file path
-$logFile = "C:\Windows\logs\keyboard_filter_script.log"
+$logFile = "C:\Windows\logs\KeyboardFilter.log"
 
 # Function to write log messages
 function Write-Log($message) {
