@@ -1,17 +1,16 @@
-# This script is updated based on MS Sample and it will only work with Windows Enterprise or Education edition.
 # Set the log file path
-$logFile = "C:\Windows\Logs\KeyboardFilterBlock.log"
+$logFile = "C:\Windows\Logs\KeyboardFilterScript.log"
 
 # Check if the keyboard filter feature is installed
 if (-not (Get-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter")) {
     # Enable the keyboard filter feature
     Enable-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter" -NoRestart
 
-    # Log the installation and reboot advice
-    "Keyboard filter feature was not installed. It has now been installed, please reboot the system." | Out-File -Append $logFile
+    # Log the installation and reboot advice with a timestamp
+    "[$(Get-Date)] Keyboard filter feature was not installed. It has been installed, but a system reboot is required for the changes to take effect." | Out-File -Append $logFile
 } else {
-    # Log that the keyboard filter feature is already installed
-    "Keyboard filter feature is already installed." | Out-File -Append $logFile
+    # Log that the keyboard filter feature is already installed with a timestamp
+    "[$(Get-Date)] Keyboard filter feature is already installed." | Out-File -Append $logFile
 }
 
 # Define the common parameters for WMI operations
@@ -31,9 +30,9 @@ function Enable-Predefined-Key($Id) {
     if ($predefined) {
         $predefined.Enabled = 1
         $predefined.Put() | Out-Null
-        "Blocked $Id" | Out-File -Append $logFile
+        "[$(Get-Date)] Blocked $Id" | Out-File -Append $logFile
     } else {
-        "$Id is not a valid predefined key" | Out-File -Append $logFile
+        "[$(Get-Date)] $Id is not a valid predefined key" | Out-File -Append $logFile
     }
 }
 
@@ -52,10 +51,10 @@ function Enable-Custom-Key($Id) {
     if ($custom) {
         $custom.Enabled = 1
         $custom.Put() | Out-Null
-        "Blocked Custom Filter $Id." | Out-File -Append $logFile
+        "[$(Get-Date)] Blocked Custom Filter $Id." | Out-File -Append $logFile
     } else {
         Set-WMIInstance -class WEKF_CustomKey -argument @{Id="$Id"} @CommonParams | Out-Null
-        "Added Custom Filter $Id." | Out-File -Append $logFile
+        "[$(Get-Date)] Added Custom Filter $Id." | Out-File -Append $logFile
     }
 }
 
@@ -75,10 +74,10 @@ function Enable-Scancode($Modifiers, [int]$Code) {
     if($scancode) {
         $scancode.Enabled = 1
         $scancode.Put() | Out-Null
-        "Blocked Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code | Out-File -Append $logFile
+        "[$(Get-Date)] Blocked Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code | Out-File -Append $logFile
     } else {
         Set-WMIInstance -class WEKF_Scancode -argument @{Modifiers="$Modifiers"; Scancode=$Code} @CommonParams | Out-Null
-        "Added Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code | Out-File -Append $logFile
+        "[$(Get-Date)] Added Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code | Out-File -Append $logFile
     }
 }
 
