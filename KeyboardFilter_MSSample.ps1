@@ -1,3 +1,4 @@
+# This script is modified based on MS sample. It will only work for Windows 10/11 ENT/EDU with keyboard filter service running.
 # Set the log file path
 $logFile = "C:\Windows\Logs\KeyboardFilterScript.log"
 
