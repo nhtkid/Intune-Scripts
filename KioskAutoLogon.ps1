@@ -1,3 +1,5 @@
+# This script will remediate two missing registry keys that prevents Kiosk PC auto-logon.
+# It will also try to execute after the user is logged on.
 # Define the log file path
 $logFile = "C:\Windows\Logs\KioskAutoLogon.log"
 
