@@ -1,93 +1,188 @@
 # This script is modified based on MS sample. It will only work for Windows 10/11 ENT/EDU with keyboard filter service running.
-# Set the log file path
-$logFile = "C:\Windows\Logs\KeyboardFilterScript.log"
+# Define the log file path
 
-# Check if the keyboard filter feature is installed
-if (-not (Get-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter")) {
-    # Enable the keyboard filter feature
-    Enable-WindowsOptionalFeature -Online -FeatureName "Client-KeyboardFilter" -NoRestart
+$logFile = "C:\Windows\logs\EnableKeyboardFilter.log"
 
-    # Log the installation and reboot advice with a timestamp
-    "[$(Get-Date)] Keyboard filter feature was not installed. It has been installed, but a system reboot is required for the changes to take effect." | Out-File -Append $logFile
-} else {
-    # Log that the keyboard filter feature is already installed with a timestamp
-    "[$(Get-Date)] Keyboard filter feature is already installed." | Out-File -Append $logFile
+ 
+
+# Function to write log messages
+
+function Write-Log($message) {
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+    "$timestamp $message" | Out-File -Append -FilePath $logFile
+
 }
 
-# Define the common parameters for WMI operations
-$CommonParams = @{"namespace"="root\standardcimv2\embedded"}
-$CommonParams += $PSBoundParameters
+ 
+
+# Function to enable a predefined key
 
 function Enable-Predefined-Key($Id) {
-    # Use Get-WMIObject to enumerate all WEKF_PredefinedKey instances,
-    # filter against key value "Id", and set that instance's "Enabled"
-    # property to 1/true.
 
-    $predefined = Get-WMIObject -class WEKF_PredefinedKey @CommonParams |
-        where {
-            $_.Id -eq "$Id"
-        };
+    try {
 
-    if ($predefined) {
-        $predefined.Enabled = 1
-        $predefined.Put() | Out-Null
-        "[$(Get-Date)] Blocked $Id" | Out-File -Append $logFile
-    } else {
-        "[$(Get-Date)] $Id is not a valid predefined key" | Out-File -Append $logFile
+        $predefined = Get-WMIObject -class WEKF_PredefinedKey -Namespace root\standardcimv2\embedded |
+
+                Where-Object { $_.Id -eq "$Id" }
+
+ 
+
+        if ($predefined) {
+
+            $predefined.Enabled = 1
+
+            $predefined.Put() | Out-Null
+
+            Write-Log "Blocked $Id"
+
+        } else {
+
+            Write-Log "$Id is not a valid predefined key"
+
+        }
+
+    } catch {
+
+        Write-Log "Error blocking predefined key $Id $_"
+
     }
+
 }
+
+ 
+
+# Function to enable a custom key
 
 function Enable-Custom-Key($Id) {
-    # Use Get-WMIObject to enumerate all WEKF_CustomKey instances,
-    # filter against key value "Id", and set that instance's "Enabled"
-    # property to 1/true.
-    # In the case that the Custom instance does not exist, add a new
-    # instance of WEKF_CustomKey using Set-WMIInstance.
 
-    $custom = Get-WMIObject -class WEKF_CustomKey @CommonParams |
-        where {
-            $_.Id -eq "$Id"
-        };
+    try {
 
-    if ($custom) {
-        $custom.Enabled = 1
-        $custom.Put() | Out-Null
-        "[$(Get-Date)] Blocked Custom Filter $Id." | Out-File -Append $logFile
-    } else {
-        Set-WMIInstance -class WEKF_CustomKey -argument @{Id="$Id"} @CommonParams | Out-Null
-        "[$(Get-Date)] Added Custom Filter $Id." | Out-File -Append $logFile
+        $custom = Get-WMIObject -class WEKF_CustomKey -Namespace root\standardcimv2\embedded |
+
+                Where-Object { $_.Id -eq "$Id" }
+
+ 
+
+        if ($custom) {
+
+            $custom.Enabled = 1
+
+            $custom.Put() | Out-Null
+
+            Write-Log "Blocked Custom Filter $Id."
+
+        } else {
+
+            Set-WMIInstance -class WEKF_CustomKey -argument @{Id="$Id"} -Namespace root\standardcimv2\embedded | Out-Null
+
+            Write-Log "Added Custom Filter $Id."
+
+        }
+
+    } catch {
+
+        Write-Log "Error blocking custom key $Id $_"
+
     }
+
 }
+
+ 
+
+# Function to enable a scancode
 
 function Enable-Scancode($Modifiers, [int]$Code) {
-    # Use Get-WMIObject to enumerate all WEKF_Scancode instances,
-    # filter against key values of "Modifiers" and "Scancode", and set
-    # that instance's "Enabled" property to 1/true.
-    # In the case that the Scancode instance does not exist, add a new
-    # instance of WEKF_Scancode using Set-WMIInstance.
 
-    $scancode =
-        Get-WMIObject -class WEKF_Scancode @CommonParams |
-            where {
-                ($_.Modifiers -eq $Modifiers) -and ($_.Scancode -eq $Code)
-            }
+    try {
 
-    if($scancode) {
-        $scancode.Enabled = 1
-        $scancode.Put() | Out-Null
-        "[$(Get-Date)] Blocked Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code | Out-File -Append $logFile
-    } else {
-        Set-WMIInstance -class WEKF_Scancode -argument @{Modifiers="$Modifiers"; Scancode=$Code} @CommonParams | Out-Null
-        "[$(Get-Date)] Added Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code | Out-File -Append $logFile
+        $scancode = Get-WMIObject -class WEKF_Scancode -Namespace root\standardcimv2\embedded |
+
+                Where-Object { ($_.Modifiers -eq $Modifiers) -and ($_.Scancode -eq $Code) }
+
+ 
+
+        if($scancode) {
+
+            $scancode.Enabled = 1
+
+            $scancode.Put() | Out-Null
+
+            Write-Log "Blocked Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code
+
+        } else {
+
+            Set-WMIInstance -class WEKF_Scancode -argument @{Modifiers="$Modifiers"; Scancode=$Code} -Namespace root\standardcimv2\embedded | Out-Null
+
+            Write-Log "Added Custom Scancode {0}+{1:X4}" -f $Modifiers, $Code
+
+        }
+
+    } catch {
+
+        Write-Log "Error blocking scancode $Modifiers+$Code $_"
+
     }
+
 }
 
-# Some example uses of the functions defined above.
+ 
+
+# Check if Keyboard Filter feature is installed
+
+$keyboardFilterFeature = Get-WindowsOptionalFeature -Online -FeatureName Client-KeyboardFilter
+
+ 
+
+if ($keyboardFilterFeature.State -ne "Enabled") {
+
+    # Install Keyboard Filter feature
+
+    Write-Log "Keyboard Filter feature is not installed. Installing..."
+
+    Enable-WindowsOptionalFeature -Online -FeatureName Client-KeyboardFilter -All -NoRestart -OutVariable result
+
+ 
+
+    if ($result.RestartNeeded -eq $true) {
+
+        Write-Log "Restart is needed after installing Keyboard Filter feature."
+
+    }
+
+} else {
+
+    Write-Log "Keyboard Filter feature is already installed."
+
+}
+
+ 
+
+# Log that the script has started
+
+Write-Log "Script started"
+
+ 
+
+# Enable the specified key combinations
+
 Enable-Predefined-Key "Ctrl+Alt+Del"
-Enable-Predefined-Key "Shift+Ctrl+Esc"
-Enable-Predefined-Key "Win+L"
-Enable-Predefined-Key "Ctrl+Esc"
+
 Enable-Predefined-Key "Windows"
+
+Enable-Predefined-Key "Escape"
+
 Enable-Predefined-Key "Alt+F4"
-Enable-Custom-Key "%"
+
+Enable-Predefined-Key "Ctrl+Esc"
+
+Enable-Predefined-Key "Alt+Tab"
+
+Enable-Custom-Key "Ctrl+V"
+
 Enable-Scancode "Ctrl" 37
+
+# Log that the script has finished
+
+Write-Log "Script finished"
