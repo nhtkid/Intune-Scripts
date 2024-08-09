@@ -1,0 +1,142 @@
+# This script can assign iOS enrollment profiles to a list of iPads
+# You need to provide a CSV of serial numbers with column heading 'serialnumber'
+
+# Import required modules
+Import-Module Microsoft.Graph.Intune
+
+# Your App ID (Client ID) goes here
+$AppId = "your-app-id-goes-here"  # Replace with your actual App ID
+
+# Function to connect to Microsoft Graph
+Function Connect-ToGraph {
+    # Update the MS Graph Environment with the new App ID
+    Update-MSGraphEnvironment -AppId $AppId -Quiet
+    
+    # Connect to Microsoft Graph
+    Connect-MSGraph
+}
+
+# Function to get DEP Onboarding Settings
+Function Get-DEPOnboardingSettings {
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/depOnboardingSettings"
+    $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
+    
+    try {
+        $response = Invoke-MSGraphRequest -HttpMethod GET -Url $uri
+        return $response.value
+    }
+    catch {
+        Write-Error "Failed to get DEP Onboarding Settings: $_"
+        return $null
+    }
+}
+
+# Function to get DEP Profiles
+Function Get-DEPProfiles {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$TokenId
+    )
+
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/depOnboardingSettings/$TokenId/enrollmentProfiles"
+    $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
+    
+    try {
+        $response = Invoke-MSGraphRequest -HttpMethod GET -Url $uri
+        return $response.value
+    }
+    catch {
+        Write-Error "Failed to get DEP Profiles: $_"
+        return $null
+    }
+}
+
+# Function to assign profile to device
+Function Assign-ProfileToDevice {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$TokenId,
+        [Parameter(Mandatory=$true)]
+        [string]$ProfileId,
+        [Parameter(Mandatory=$true)]
+        [string]$SerialNumber
+    )
+
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/depOnboardingSettings/$TokenId/enrollmentProfiles('$ProfileId')/updateDeviceProfileAssignment"
+    $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
+    
+    $body = @{
+        "deviceIds" = @($SerialNumber)
+    } | ConvertTo-Json
+
+    try {
+        Invoke-MSGraphRequest -HttpMethod POST -Url $uri -Content $body
+        Write-Host "Successfully assigned profile to device $SerialNumber"
+    }
+    catch {
+        Write-Error "Failed to assign profile to device $SerialNumber: $_"
+    }
+}
+
+# Main script execution
+
+# Connect to Microsoft Graph
+Connect-ToGraph
+
+Write-Host "Connected to Microsoft Graph using App ID: $AppId. Ready to process DEP profiles and devices."
+
+# Get DEP Tokens
+$tokens = Get-DEPOnboardingSettings
+
+if ($tokens) {
+    # If multiple tokens, let user select one
+    if ($tokens.Count -gt 1) {
+        Write-Host "Multiple DEP tokens found. Please select one:"
+        for ($i=0; $i -lt $tokens.Count; $i++) {
+            Write-Host "$($i+1): $($tokens[$i].tokenName)"
+        }
+        $selection = Read-Host "Enter the number of your selection"
+        $selectedToken = $tokens[$selection-1]
+    } else {
+        $selectedToken = $tokens[0]
+    }
+
+    Write-Host "Using DEP token: $($selectedToken.tokenName)"
+
+    # Get DEP Profiles
+    $profiles = Get-DEPProfiles -TokenId $selectedToken.id
+
+    if ($profiles) {
+        # Let user select a profile
+        Write-Host "Available DEP Profiles:"
+        for ($i=0; $i -lt $profiles.Count; $i++) {
+            Write-Host "$($i+1): $($profiles[$i].displayName)"
+        }
+        $selection = Read-Host "Enter the number of the profile you want to assign"
+        $selectedProfile = $profiles[$selection-1]
+
+        Write-Host "Using profile: $($selectedProfile.displayName)"
+
+        # Get CSV file path
+        $csvPath = Read-Host "Enter the path to your CSV file containing device serial numbers"
+
+        # Read CSV file
+        $devices = Import-Csv $csvPath
+
+        # Process each device
+        foreach ($device in $devices) {
+            Assign-ProfileToDevice -TokenId $selectedToken.id -ProfileId $selectedProfile.id -SerialNumber $device.serialnumber
+        }
+    } else {
+        Write-Host "No DEP profiles found for the selected token."
+    }
+} else {
+    Write-Host "No DEP tokens found in your environment."
+}
+
+Write-Host "Script execution completed."
+
+# Note: There's no explicit disconnect cmdlet for MSGraph, the connection will time out on its own
