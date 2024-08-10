@@ -64,16 +64,28 @@ Function Assign-ProfileToDevice {
         Write-Host "Response: $($response | ConvertTo-Json -Depth 5)"
     }
     catch {
-        Write-Host
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -ForegroundColor Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        Write-Host
+        Write-Host "An error occurred:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        if ($_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            Write-Host "Status Code: $statusCode" -ForegroundColor Red
+            
+            try {
+                $result = $_.Exception.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($result)
+                $reader.BaseStream.Position = 0
+                $reader.DiscardBufferedData()
+                $responseBody = $reader.ReadToEnd()
+                Write-Host "Response content:`n$responseBody" -ForegroundColor Red
+            }
+            catch {
+                Write-Host "Could not read response body: $_" -ForegroundColor Red
+            }
+        }
+        else {
+            Write-Host "No response object available." -ForegroundColor Red
+        }
+        Write-Host "Request to $Uri failed." -ForegroundColor Red
     }
 }
 
