@@ -58,8 +58,12 @@ Function Assign-ProfileToDevice {
         Write-Host "URI: $uri"
         Write-Host "Request Body: $JSON"
 
-        $response = Invoke-MSGraphRequest -HttpMethod POST -Url $uri -Content $JSON -ContentType "application/json"
-        
+        $headers = @{
+            "Content-Type" = "application/json"
+        }
+
+        $response = Invoke-MSGraphRequest -HttpMethod POST -Url $uri -Content $JSON -Headers $headers
+
         if ($response.StatusCode -eq 204) {
             Write-Host "Success: Device(s) assigned!" -ForegroundColor Green
         } else {
@@ -91,6 +95,8 @@ Function Assign-ProfileToDevice {
         Write-Host "Request to $Uri failed." -ForegroundColor Red
     }
 }
+
+# The rest of the script remains the same
 
 # Main script execution
 Connect-ToGraph
