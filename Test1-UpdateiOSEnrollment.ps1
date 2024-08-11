@@ -36,22 +36,22 @@ Function Get-DEPProfiles {
 Function Assign-ProfileToDevice {
     param (
         [Parameter(Mandatory=$true)]
-        $TokenId,
+        $DepOnboardingSettingId,
         [Parameter(Mandatory=$true)]
-        $ProfileId,
+        $EnrollmentProfileId,
         [Parameter(Mandatory=$true)]
         $SerialNumber
     )
 
     $graphApiVersion = "beta"
-    $Resource = "deviceManagement/depOnboardingSettings/$TokenId/enrollmentProfiles('$ProfileId')/updateDeviceProfileAssignment"
+    $Resource = "deviceManagement/depOnboardingSettings/$DepOnboardingSettingId/enrollmentProfiles/$EnrollmentProfileId/updateDeviceProfileAssignment"
     $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
-    
+
     try {
-        $DevicesArray = $SerialNumber -split ","
+        $DevicesArray = @($SerialNumber)
         
-        $JSON = @{ 
-            "deviceIds" = $DevicesArray 
+        $JSON = @{
+            "deviceIds" = $DevicesArray
         } | ConvertTo-Json
 
         Write-Host "Attempting to assign profile to device(s): $SerialNumber"
@@ -60,19 +60,22 @@ Function Assign-ProfileToDevice {
 
         $response = Invoke-MSGraphRequest -HttpMethod POST -Url $uri -Content $JSON -ContentType "application/json"
         
-        Write-Host "Success: Device(s) assigned!" -ForegroundColor Green
-        Write-Host "Response: $($response | ConvertTo-Json -Depth 5)"
+        if ($response.StatusCode -eq 204) {
+            Write-Host "Success: Device(s) assigned!" -ForegroundColor Green
+        } else {
+            Write-Host "Unexpected response: $($response.StatusCode)" -ForegroundColor Yellow
+        }
     }
     catch {
         Write-Host "An error occurred:" -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
+        
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
             Write-Host "Status Code: $statusCode" -ForegroundColor Red
             
             try {
-                $result = $_.Exception.Response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($result)
+                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
                 $reader.BaseStream.Position = 0
                 $reader.DiscardBufferedData()
                 $responseBody = $reader.ReadToEnd()
@@ -120,7 +123,7 @@ if ($tokens) {
 
         # Process each device
         foreach ($device in $devices) {
-            Assign-ProfileToDevice -TokenId $selectedToken.id -ProfileId $selectedProfile.id -SerialNumber $device.serialnumber
+            Assign-ProfileToDevice -DepOnboardingSettingId $selectedToken.id -EnrollmentProfileId $selectedProfile.id -SerialNumber $device.serialnumber
         }
     } else {
         Write-Host "No DEP profiles found for the selected token."
