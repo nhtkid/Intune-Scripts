@@ -32,72 +32,45 @@ Function Get-DEPProfiles {
     (Invoke-MSGraphRequest -HttpMethod GET -Url $uri).value
 }
 
-# Updated Function to assign profile to device
 Function Assign-ProfileToDevice {
     param (
         [Parameter(Mandatory=$true)]
-        $DepOnboardingSettingId,
+        $id,
         [Parameter(Mandatory=$true)]
-        $EnrollmentProfileId,
+        $DeviceSerialNumber,
         [Parameter(Mandatory=$true)]
-        $SerialNumber
+        $ProfileId
     )
 
     $graphApiVersion = "beta"
-    $Resource = "deviceManagement/depOnboardingSettings/$DepOnboardingSettingId/enrollmentProfiles/$EnrollmentProfileId/updateDeviceProfileAssignment"
-    $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
+    $Resource = "deviceManagement/depOnboardingSettings/$id/enrollmentProfiles('$ProfileId')/updateDeviceProfileAssignment"
 
     try {
-        $DevicesArray = @($SerialNumber)
+        $DevicesArray = @($DeviceSerialNumber)
         
         $JSON = @{
             "deviceIds" = $DevicesArray
         } | ConvertTo-Json
 
-        Write-Host "Attempting to assign profile to device(s): $SerialNumber"
-        Write-Host "URI: $uri"
-        Write-Host "Request Body: $JSON"
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
+        $response = Invoke-RestMethod -Uri $uri -Headers $authToken -Method Post -Body $JSON -ContentType "application/json"
 
-        $headers = @{
-            "Content-Type" = "application/json"
-        }
-
-        $response = Invoke-MSGraphRequest -HttpMethod POST -Url $uri -Content $JSON -Headers $headers
-
-        if ($response.StatusCode -eq 204) {
-            Write-Host "Success: Device(s) assigned!" -ForegroundColor Green
-        } else {
-            Write-Host "Unexpected response: $($response.StatusCode)" -ForegroundColor Yellow
-            Write-Host "Response content: $($response.Content)" -ForegroundColor Yellow
-        }
+        Write-Host "Success: Device assigned!" -ForegroundColor Green
     }
     catch {
         Write-Host "An error occurred:" -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
         
         if ($_.Exception.Response) {
-            $statusCode = [int]$_.Exception.Response.StatusCode
-            Write-Host "Status Code: $statusCode" -ForegroundColor Red
-            
-            try {
-                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-                $reader.BaseStream.Position = 0
-                $reader.DiscardBufferedData()
-                $responseBody = $reader.ReadToEnd()
-                Write-Host "Response content:`n$responseBody" -ForegroundColor Red
-            }
-            catch {
-                Write-Host "Could not read response body: $_" -ForegroundColor Red
-            }
-        }
-        else {
-            Write-Host "No response object available." -ForegroundColor Red
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $reader.BaseStream.Position = 0
+            $reader.DiscardBufferedData()
+            $responseBody = $reader.ReadToEnd()
+            Write-Host "Response content:`n$responseBody" -ForegroundColor Red
         }
         Write-Host "Request to $Uri failed." -ForegroundColor Red
     }
 }
-
-# The rest of the script remains the same
 
 # Main script execution
 Connect-ToGraph
