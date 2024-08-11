@@ -68,6 +68,7 @@ Function Assign-ProfileToDevice {
             Write-Host "Success: Device(s) assigned!" -ForegroundColor Green
         } else {
             Write-Host "Unexpected response: $($response.StatusCode)" -ForegroundColor Yellow
+            Write-Host "Response content: $($response.Content)" -ForegroundColor Yellow
         }
     }
     catch {
