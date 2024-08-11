@@ -35,33 +35,40 @@ Function Get-DEPProfiles {
 Function Assign-ProfileToDevice {
     param (
         [Parameter(Mandatory=$true)]
-        $id,
+        $DepOnboardingSettingId,
         [Parameter(Mandatory=$true)]
-        $DeviceSerialNumber,
+        $EnrollmentProfileId,
         [Parameter(Mandatory=$true)]
-        $ProfileId
+        $SerialNumber
     )
 
     $graphApiVersion = "beta"
-    $Resource = "deviceManagement/depOnboardingSettings/$id/enrollmentProfiles('$ProfileId')/updateDeviceProfileAssignment"
+    $Resource = "deviceManagement/depOnboardingSettings/$DepOnboardingSettingId/enrollmentProfiles/$EnrollmentProfileId/updateDeviceProfileAssignment"
 
     try {
-        $DevicesArray = @($DeviceSerialNumber)
+        $DevicesArray = @($SerialNumber)
         
         $JSON = @{
             "deviceIds" = $DevicesArray
         } | ConvertTo-Json
 
+        Write-Host "Attempting to assign profile to device(s): $SerialNumber"
+        Write-Host "URI: $uri"
+        Write-Host "Request Body: $JSON"
+
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         $response = Invoke-RestMethod -Uri $uri -Headers $authToken -Method Post -Body $JSON -ContentType "application/json"
-
-        Write-Host "Success: Device assigned!" -ForegroundColor Green
+        
+        Write-Host "Success: Device(s) assigned!" -ForegroundColor Green
     }
     catch {
         Write-Host "An error occurred:" -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
         
         if ($_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            Write-Host "Status Code: $statusCode" -ForegroundColor Red
+            
             $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
             $reader.BaseStream.Position = 0
             $reader.DiscardBufferedData()
