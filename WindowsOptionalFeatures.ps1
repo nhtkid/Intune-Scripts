@@ -8,13 +8,15 @@ $featuresToEnable = @("Client-KeyboardFilter", "Client-EmbeddedLogon")
 $featuresToDisable = @("Internet-Explorer-Optional-amd64", "WindowsMediaPlayer")
 # Set log file path and initialize changes tracker
 $logPath = "C:\Windows\Logs\WindowsFeatureManagement.log"
-$changesApplied = $false
+$restartNeeded = $false
+
 # Function to write log messages
 function Write-Log($Message) {
     $logMessage = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
     Add-Content -Path $logPath -Value $logMessage
     Write-Host $logMessage
 }
+
 # Function to manage Windows features (enable or disable)
 function Set-WindowsFeatures($features, $action) {
     foreach ($feature in $features) {
@@ -25,7 +27,9 @@ function Set-WindowsFeatures($features, $action) {
             # Enable or disable the feature
             $result = & "$action-WindowsOptionalFeature" -Online -FeatureName $feature -NoRestart
             Write-Log "Feature $feature ${action}d successfully. Restart needed: $($result.RestartNeeded)"
-            $script:changesApplied = $true
+            if ($result.RestartNeeded) {
+                $script:restartNeeded = $true
+            }
             # Configure MsKeyboardFilter service if enabling Client-KeyboardFilter
             if ($feature -eq 'Client-KeyboardFilter' -and $action -eq 'Enable') {
                 Set-MsKeyboardFilterService
@@ -35,6 +39,7 @@ function Set-WindowsFeatures($features, $action) {
         }
     }
 }
+
 # Function to configure MsKeyboardFilter service
 function Set-MsKeyboardFilterService {
     try {
@@ -46,18 +51,23 @@ function Set-MsKeyboardFilterService {
         Write-Log "Error configuring MsKeyboardFilter service: $_"
     }
 }
+
 # Main script execution
 Write-Log "Script execution started"
+
 # Enable specified features
 Set-WindowsFeatures $featuresToEnable 'Enable'
+
 # Disable specified features
 Set-WindowsFeatures $featuresToDisable 'Disable'
+
 # Reboot if changes were applied
-if ($changesApplied) {
+if ($restartNeeded) {
     Write-Log "Changes applied. Rebooting in 10 seconds..."
     Start-Sleep -Seconds 10
     Restart-Computer -Force
 } else {
-    Write-Log "No changes applied. No reboot necessary."
+    Write-Log "No changes applied or no reboot necessary."
 }
+
 Write-Log "Script execution completed"
