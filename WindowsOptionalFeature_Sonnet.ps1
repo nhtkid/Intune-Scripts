@@ -1,104 +1,57 @@
 <#
 .SYNOPSIS
-    This script manages Windows optional features by enabling or disabling specified features.
-
-.DESCRIPTION
-    The script performs the following actions:
-    1. Enables specified Windows optional features if they are not already enabled.
-    2. Disables specified Windows optional features if they are not already disabled.
-    3. Logs all actions and their results to a file in C:\Windows\Logs\.
-    4. Forces a system reboot if any changes were attempted, regardless of whether a reboot is required.
-
-.NOTES
-    - Run this script with administrative privileges.
-    - The script will attempt to create a log file in C:\Windows\Logs\. Ensure the executing user has write permissions.
-    - A forced reboot will occur if any changes are attempted, with a 10-second warning.
+    Manages Windows optional features and configures the KeyboardFilter service.
+    Use @() for $featuresToEnable or $featuresToDisable if no changes are needed.
 #>
 
-# Define the features to be enabled and disabled
-$featuresToEnable = @(
-    "Client-DeviceLockdown-CustomLogon",
-    "Client-DeviceLockdown-KeyboardFilter"
-)
-
-$featuresToDisable = @(
-    "WindowsMediaPlayer",
-    "Internet-Explorer-Optional-amd64"
-)
-
-# Set up logging
+$featuresToEnable = @("Client-KeyboardFilter", "Client-EmbeddedLogon")
+$featuresToDisable = @("Internet-Explorer-Optional-amd64", "WindowsMediaPlayer")
 $logPath = "C:\Windows\Logs\WindowsFeatureManagement.log"
-$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$changesApplied = $false
 
-function Write-Log {
-    param(
-        [string]$Message
-    )
-    $logMessage = "[$timestamp] $Message"
+function Write-Log($Message) {
+    $logMessage = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
     Add-Content -Path $logPath -Value $logMessage
     Write-Host $logMessage
 }
 
-# Function to enable features
-function Enable-WindowsFeatures($features) {
+function Manage-WindowsFeatures($features, $action) {
     foreach ($feature in $features) {
-        $state = Get-WindowsOptionalFeature -Online -FeatureName $feature
-        if ($state.State -eq "Disabled") {
-            Write-Log "Enabling feature: $feature"
-            $result = Enable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart
-            if ($result.RestartNeeded) {
-                Write-Log "Feature $feature enabled successfully. Restart needed."
-            } else {
-                Write-Log "Feature $feature enabled successfully. No restart needed."
-            }
+        $state = (Get-WindowsOptionalFeature -Online -FeatureName $feature).State
+        if (($action -eq 'Enable' -and $state -eq 'Disabled') -or ($action -eq 'Disable' -and $state -eq 'Enabled')) {
+            Write-Log "$action feature: $feature"
+            $result = & "$action-WindowsOptionalFeature" -Online -FeatureName $feature -NoRestart
+            Write-Log "Feature $feature ${action}d successfully. Restart needed: $($result.RestartNeeded)"
             $script:changesApplied = $true
+            if ($feature -eq 'Client-KeyboardFilter' -and $action -eq 'Enable') {
+                Configure-KeyboardFilterService
+            }
         } else {
-            Write-Log "Feature $feature is already enabled. Skipping."
+            Write-Log "Feature $feature is already $($action.ToLower())d. Skipping."
         }
     }
 }
 
-# Function to disable features
-function Disable-WindowsFeatures($features) {
-    foreach ($feature in $features) {
-        $state = Get-WindowsOptionalFeature -Online -FeatureName $feature
-        if ($state.State -eq "Enabled") {
-            Write-Log "Disabling feature: $feature"
-            $result = Disable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart
-            if ($result.RestartNeeded) {
-                Write-Log "Feature $feature disabled successfully. Restart needed."
-            } else {
-                Write-Log "Feature $feature disabled successfully. No restart needed."
-            }
-            $script:changesApplied = $true
-        } else {
-            Write-Log "Feature $feature is already disabled. Skipping."
-        }
+function Configure-KeyboardFilterService {
+    try {
+        Set-Service -Name "KeyboardFilter" -StartupType Automatic
+        Start-Service -Name "KeyboardFilter"
+        Write-Log "KeyboardFilter service configured and started"
+    } catch {
+        Write-Log "Error configuring KeyboardFilter service: $_"
     }
 }
 
-# Variable to track if any changes were attempted
-$script:changesApplied = $false
-
-# Start logging
 Write-Log "Script execution started"
+Manage-WindowsFeatures $featuresToEnable 'Enable'
+Manage-WindowsFeatures $featuresToDisable 'Disable'
 
-# Enable specified features
-Write-Log "Attempting to enable features"
-Enable-WindowsFeatures $featuresToEnable
-
-# Disable specified features
-Write-Log "Attempting to disable features"
-Disable-WindowsFeatures $featuresToDisable
-
-# Reboot if any changes were attempted
 if ($changesApplied) {
-    Write-Log "Changes have been applied. Rebooting the system in 10 seconds..."
+    Write-Log "Changes applied. Rebooting in 10 seconds..."
     Start-Sleep -Seconds 10
-    Write-Log "Initiating system reboot"
     Restart-Computer -Force
 } else {
-    Write-Log "No changes were applied. No reboot necessary."
+    Write-Log "No changes applied. No reboot necessary."
 }
 
 Write-Log "Script execution completed"
