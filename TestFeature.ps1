@@ -4,7 +4,7 @@
 #>
 
 # Set log file path
-$logPath = "C:\Windows\Logs\KeyboardFilterFeature.log"
+$logPath = "C:\Windows\Logs\KeyboardFilterInstallation.log"
 
 # Function to write log messages
 function Write-Log($Message) {
@@ -32,9 +32,15 @@ function Install-KeyboardFilter {
 # Function to configure MsKeyboardFilter service
 function Set-MsKeyboardFilterService {
     try {
+        Write-Log "Configuring MsKeyboardFilter service..."
         Set-Service -Name "MsKeyboardFilter" -StartupType Automatic
+        Write-Log "MsKeyboardFilter service set to Automatic startup"
+        
         Start-Service -Name "MsKeyboardFilter"
-        Write-Log "MsKeyboardFilter service configured and started"
+        Write-Log "MsKeyboardFilter service started successfully"
+        
+        $service = Get-Service -Name "MsKeyboardFilter"
+        Write-Log "Current MsKeyboardFilter service status: $($service.Status)"
     } catch {
         Write-Log "Error configuring MsKeyboardFilter service: $_"
     }
@@ -45,11 +51,13 @@ Write-Log "Script execution started"
 
 $restartNeeded = Install-KeyboardFilter
 
+# Always configure and start the service, regardless of whether a restart is needed
+Set-MsKeyboardFilterService
+
 if ($restartNeeded) {
-    Write-Log "Keyboard Filter installed. Rebooting in 10 seconds..."
+    Write-Log "Keyboard Filter installed and service configured. Rebooting in 10 seconds..."
     Start-Sleep -Seconds 10
     Restart-Computer -Force
 } else {
-    Set-MsKeyboardFilterService
     Write-Log "No reboot necessary. Script execution completed."
 }
