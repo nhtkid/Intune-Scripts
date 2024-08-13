@@ -40,18 +40,6 @@ function Set-WindowsFeatures($features, $action) {
     }
 }
 
-# Function to configure MsKeyboardFilter service
-function Set-MsKeyboardFilterService {
-    try {
-        # Set service to Automatic startup and start it
-        Set-Service -Name "MsKeyboardFilter" -StartupType Automatic
-        Start-Service -Name "MsKeyboardFilter"
-        Write-Log "MsKeyboardFilter service configured and started"
-    } catch {
-        Write-Log "Error configuring MsKeyboardFilter service: $_"
-    }
-}
-
 # Main script execution
 Write-Log "Script execution started"
 
