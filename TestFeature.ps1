@@ -1,30 +1,23 @@
 <#
 .SYNOPSIS
-    Installs the Windows Keyboard Filter feature if needed, initiates a reboot, and sets up auto-start of the service after reboot.
+    Installs the Windows Keyboard Filter feature if needed, configures the service, and reboots the system.
 .DESCRIPTION
-    This script checks for the Windows Keyboard Filter feature, installs it if not present,
-    initiates a system reboot, and sets up a scheduled task to configure the service after reboot.
-    It includes error handling and logging for each step of the process.
+    This script is designed for deployment via Intune. It checks for the Windows Keyboard Filter feature, 
+    installs it if not present, attempts to configure and start the service, and then initiates a system reboot.
+    A scheduled task is created to ensure the service starts after reboot.
 #>
 
 # Set log file path
-$logPath = "C:\Windows\Logs\KeyboardFilterSetup.log"
+$logPath = "C:\Windows\Logs\EnableKeyboardFilterFeature.log"
 
 # Function to write log messages
 function Write-Log {
     param (
-        [string]$Message,
-        [string]$Level = "INFO"
+        [string]$Message
     )
-    $logMessage = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Level] $Message"
+    $logMessage = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
     Add-Content -Path $logPath -Value $logMessage
     Write-Host $logMessage
-}
-
-# Function to check if running with admin privileges
-function Test-AdminPrivileges {
-    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 # Function to create a scheduled task for post-reboot service configuration
@@ -40,34 +33,40 @@ function Set-PostRebootTask {
 try {
     Write-Log "Script execution started"
 
-    # Check for admin privileges
-    if (-not (Test-AdminPrivileges)) {
-        throw "This script requires administrator privileges. Please run as administrator."
-    }
-
     # 1. Check and install feature if necessary
     $feature = "Client-KeyboardFilter"
-    $featureState = (Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction Stop).State
+    $featureState = (Get-WindowsOptionalFeature -Online -FeatureName $feature).State
     if ($featureState -eq 'Disabled') {
         Write-Log "Installing $feature feature..."
-        $result = Enable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart -ErrorAction Stop
+        Enable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart | Out-Null
         Write-Log "$feature feature installed successfully"
     } else {
         Write-Log "$feature feature is already installed"
     }
 
-    # 2. Set up post-reboot task
-    Write-Log "Setting up post-reboot task to configure MsKeyboardFilter service..."
+    # 2. Attempt to configure and start the service
+    Write-Log "Attempting to configure and start MsKeyboardFilter service..."
+    try {
+        Set-Service -Name "MsKeyboardFilter" -StartupType Automatic
+        Start-Service -Name "MsKeyboardFilter"
+        Write-Log "MsKeyboardFilter service configured and started successfully"
+    }
+    catch {
+        Write-Log "Unable to start MsKeyboardFilter service. It will be started after reboot: $_"
+    }
+
+    # 3. Set up post-reboot task to ensure service is started
+    Write-Log "Setting up post-reboot task to ensure MsKeyboardFilter service is running..."
     Set-PostRebootTask
     Write-Log "Post-reboot task created successfully"
 
-    # 3. Reboot
+    # 4. Reboot
     Write-Log "Rebooting system in 10 seconds..."
     Start-Sleep -Seconds 10
     Restart-Computer -Force
 }
 catch {
-    Write-Log "An error occurred: $_" "ERROR"
+    Write-Log "An error occurred: $_"
     exit 1
 }
 finally {
