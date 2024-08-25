@@ -1,24 +1,23 @@
 # Define the log file path
 $logFile = "C:\Windows\Logs\AppRemoval.log"
 
-# Get all installed packages that contain "Dell" in their name
-$dellPackages = Get-AppxPackage | Where-Object { $_.Name -like "*Dell*" }
+# Define the app names to remove
+$appNames = @("Command", "SupportAssistant")
 
-# Check for each package and remove if it matches the known Dell package names
-foreach ($package in $dellPackages) {
-    if ($package.Name -like "*CommandUpdate*" -or $package.Name -like "*SupportAssistant*") {
-        # Package is a known Dell package, so remove it
-        Write-Host "Removing $($package.Name)..."
-        Remove-AppxPackage -Package $package.PackageFullName
-        Write-Host "$($package.Name) has been removed."
+# Remove Win32 packages
+$win32Packages = Get-Package | Where-Object { $_.Name -match "Dell.*($($appNames -join '|'))" }
+foreach ($package in $win32Packages) {
+    Write-Host "Removing $($package.Name)..."
+    Uninstall-Package -Name $package.Name
+    Write-Host "$($package.Name) has been removed."
+    "$(Get-Date): $($package.Name) has been removed." | Out-File -FilePath $logFile -Append
+}
 
-        # Write to the log file
-        "$(Get-Date): $($package.Name) has been removed." | Out-File -FilePath $logFile -Append
-    } else {
-        # Package is not a known Dell package
-        Write-Host "$($package.Name) is not a known Dell package."
-
-        # Write to the log file
-        "$(Get-Date): $($package.Name) is not a known Dell package." | Out-File -FilePath $logFile -Append
-    }
+# Remove UWP packages
+$uwpPackages = Get-AppxPackage | Where-Object { $_.Name -match "Dell.*($($appNames -join '|'))" }
+foreach ($package in $uwpPackages) {
+    Write-Host "Removing $($package.Name)..."
+    Remove-AppxPackage -Package $package.PackageFullName
+    Write-Host "$($package.Name) has been removed."
+    "$(Get-Date): $($package.Name) has been removed." | Out-File -FilePath $logFile -Append
 }
