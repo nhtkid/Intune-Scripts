@@ -1,4 +1,4 @@
-# Script to remove Dell Command and Support Assistant applications
+# Script to remove specific Dell applications (Command, SupportAssist, Optimizer)
 # Log file path
 $logFile = "C:\Windows\Logs\DellAppRemoval.log"
 
@@ -11,22 +11,14 @@ function Write-Log {
 
 # Function to check if app name matches the criteria
 function Match-AppName {
-    param($name, $criteria)
-    foreach ($criterion in $criteria) {
-        if ($criterion.Count -eq 1) {
-            if ($name -like "*$($criterion[0])*") { return $true }
-        } elseif ($criterion.Count -eq 2) {
-            if ($name -like "*$($criterion[0])*" -and $name -like "*$($criterion[1])*") { return $true }
-        }
-    }
-    return $false
+    param($name, $keywords)
+    return ($keywords[0] -in $name) -and ($keywords[1] -in $name)
 }
 
 # Function to uninstall Win32 application
 function Uninstall-Win32App {
-    param($criteria)
-    Write-Log "Searching for Win32 apps matching criteria"
-    $apps = Get-Package | Where-Object { Match-AppName $_.Name $criteria }
+    param($keywords)
+    $apps = Get-Package | Where-Object { Match-AppName $_.Name $keywords }
     foreach ($app in $apps) {
         Write-Log "Attempting to uninstall Win32 app: $($app.Name)"
         try {
@@ -41,9 +33,8 @@ function Uninstall-Win32App {
 
 # Function to uninstall AppX package
 function Uninstall-AppxPackage {
-    param($criteria)
-    Write-Log "Searching for AppX packages matching criteria"
-    $packages = Get-AppxPackage | Where-Object { Match-AppName $_.Name $criteria }
+    param($keywords)
+    $packages = Get-AppxPackage | Where-Object { Match-AppName $_.Name $keywords }
     foreach ($package in $packages) {
         Write-Log "Attempting to uninstall AppX package: $($package.Name)"
         try {
@@ -59,30 +50,34 @@ function Uninstall-AppxPackage {
 # Main script execution
 Write-Log "Starting Dell application removal script"
 
-# Criteria for Win32 apps to remove (each sub-array represents AND condition between words)
-$win32Criteria = @(
+# List of target apps with their keywords
+$targetApps = @(
     @("Dell", "Command"),
-    @("Dell", "Support"),
-    @("Dell", "Update"),
-    @("Dell", "Optimize")
+    @("Dell", "SupportAssist"),
+    @("Dell", "Optimizer")
 )
 
-# Criteria for AppX packages to remove
-$appxCriteria = @(
-    @("DellInc.DellCommand"),
-    @("DellInc.DellSupport"),
-    @("DellInc.DellUpdate"),
-    @("DellInc.DellOptimize"),
-    @("Dell", "Command"),
-    @("Dell", "Support"),
-    @("Dell", "Update"),
-    @("Dell", "Optimize")
-)
-
-# Remove Win32 apps
-Uninstall-Win32App $win32Criteria
-
-# Remove AppX packages
-Uninstall-AppxPackage $appxCriteria
+# Loop through each target app
+foreach ($app in $targetApps) {
+    Write-Log "Checking for applications containing keywords: $($app[0]) and $($app[1])"
+    
+    # Check and uninstall Win32 apps
+    $win32Apps = Get-Package | Where-Object { Match-AppName $_.Name $app }
+    if ($win32Apps) {
+        Write-Log "Found matching Win32 app(s). Attempting to uninstall."
+        Uninstall-Win32App $app
+    } else {
+        Write-Log "No matching Win32 app found."
+    }
+    
+    # Check and uninstall UWP apps
+    $uwpApps = Get-AppxPackage | Where-Object { Match-AppName $_.Name $app }
+    if ($uwpApps) {
+        Write-Log "Found matching UWP app(s). Attempting to uninstall."
+        Uninstall-AppxPackage $app
+    } else {
+        Write-Log "No matching UWP app found."
+    }
+}
 
 Write-Log "Dell application removal script completed"
