@@ -1,5 +1,5 @@
 # Define Log Path
-$ScriptVersion = "1.5"
+$ScriptVersion = "2.0"
 $DateTime = [DateTime]::Now.ToString("yyyyMMdd")
 $LogFile = "RemoveDellOEMApplications-" + $ScriptVersion + "_" + $DateTime + ".log"
 $LogPath = "C:\Windows\Logs"
@@ -48,38 +48,53 @@ ForEach ($OEMApplication in $OEMApplications){
 
     # Check if any applications were found
     If (($null -eq $RegistryApps) -and ($null -eq $AppXProvisionedApps) -and ($null -eq $AppXPackageApps) -and ($null -eq $W32Apps)){
-        Write-Output "All $OEMApplication Applications are Uninstalled."
+        Write-Output "No $OEMApplication Applications found to uninstall."
         Write-Output $NewLine
     } Else {
         # Remove AppX Provisioned Apps
         If ($null -ne $AppXProvisionedApps){
-            Write-Output "[ $OEMApplication AppX Provisioned Apps Installed ]"
             ForEach ($AppXProvisionedApp in $AppXProvisionedApps){
                 $AppXDisplayName = $AppXProvisionedApp.DisplayName
-                Write-Output "$AppXDisplayName [AppX Provisioned App]"
-                $AppXProvisionedApp | Remove-ProvisionedAppxPackage -Online -AllUsers
+                Write-Output "Uninstalling $AppXDisplayName [AppX Provisioned App]..."
+                Try {
+                    $AppXProvisionedApp | Remove-ProvisionedAppxPackage -Online -AllUsers -ErrorAction Stop
+                    Write-Output "Successfully uninstalled $AppXDisplayName [AppX Provisioned App]."
+                }
+                Catch {
+                    Write-Output "Failed to uninstall $AppXDisplayName [AppX Provisioned App]. Error: $_"
+                }
                 Write-Output $NewLine
             }
         }
 
         # Remove AppX Package Apps
         If ($null -ne $AppXPackageApps){
-            Write-Output "[ $OEMApplication AppX Packages Installed ]"
             ForEach ($AppXPackageApp in $AppXPackageApps){
                 $AppXName = $AppXPackageApp.Name
-                Write-Output "$AppXName [AppX Package]"
-                $AppXPackageApp | Remove-AppxPackage -AllUsers
+                Write-Output "Uninstalling $AppXName [AppX Package]..."
+                Try {
+                    $AppXPackageApp | Remove-AppxPackage -AllUsers -ErrorAction Stop
+                    Write-Output "Successfully uninstalled $AppXName [AppX Package]."
+                }
+                Catch {
+                    Write-Output "Failed to uninstall $AppXName [AppX Package]. Error: $_"
+                }
                 Write-Output $NewLine
             }
         }
 
         # Remove W32 apps
         If ($null -ne $W32Apps){
-            Write-Output "[ $OEMApplication W32 Applications Installed ]"
             ForEach ($W32App in $W32Apps){
                 $AppName = $W32App.Name
-                Write-Output "$AppName [W32 App]"
-                Uninstall-Package -Name $AppName -Force
+                Write-Output "Uninstalling $AppName [W32 App]..."
+                Try {
+                    Uninstall-Package -Name $AppName -Force -ErrorAction Stop
+                    Write-Output "Successfully uninstalled $AppName [W32 App]."
+                }
+                Catch {
+                    Write-Output "Failed to uninstall $AppName [W32 App]. Error: $_"
+                }
                 Write-Output $NewLine
             }
         }
@@ -89,17 +104,22 @@ ForEach ($OEMApplication in $OEMApplications){
         $OEMProcesses = Get-Process -ProcessName $ProcessToStop -ErrorAction SilentlyContinue
 
         If ($null -ne $OEMProcesses){
-            Write-Output "[ Stop Dell Running Processes ]"
+            Write-Output "Stopping Dell Optimizer Running Processes..."
             While ($null -ne $OEMProcesses){
                 ForEach ($OEMProcess in $OEMProcesses){
                     $OEMProcessName = $OEMProcess.ProcessName
-                    Write-Output "$OEMProcessName Process is Running."
-                    Stop-Process -Name $OEMProcessName -Force
+                    Write-Output "Stopping $OEMProcessName Process..."
+                    Try {
+                        Stop-Process -Name $OEMProcessName -Force -ErrorAction Stop
+                        Write-Output "Successfully stopped $OEMProcessName Process."
+                    }
+                    Catch {
+                        Write-Output "Failed to stop $OEMProcessName Process. Error: $_"
+                    }
                     Start-Sleep -s 5
                     $OEMProcesses = Get-Process -ProcessName $ProcessToStop -ErrorAction SilentlyContinue
                 }
             }
-            Write-Output "$OEMProcessName Process has been Stopped."
             Write-Output $NewLine
         }
 
@@ -111,15 +131,21 @@ ForEach ($OEMApplication in $OEMApplications){
         Where-Object {$_.State -ne "Stopped" -or $_.StartMode -ne "Disabled"} -ErrorAction SilentlyContinue
 
         If ($null -ne $OEMServices){
-            Write-Output "[ Stop and Disable Dell Running Services ]"
+            Write-Output "Stopping and Disabling Dell Optimizer Running Services..."
             While ($null -ne $OEMServices){
                 ForEach ($OEMService in $OEMServices){
                     $OEMServiceName = $OEMService.Name
                     $OEMServiceDisplayName = $OEMService.DisplayName
                     $OEMServiceState = $OEMService.State
-                    Write-Output "$OEMServiceDisplayName Service is $OEMServiceState."
-                    Set-Service -Name $OEMServiceName -StartupType Disabled
-                    Stop-Service -Name $OEMServiceName -Force
+                    Write-Output "Stopping and Disabling $OEMServiceDisplayName Service..."
+                    Try {
+                        Set-Service -Name $OEMServiceName -StartupType Disabled -ErrorAction Stop
+                        Stop-Service -Name $OEMServiceName -Force -ErrorAction Stop
+                        Write-Output "Successfully stopped and disabled $OEMServiceDisplayName Service."
+                    }
+                    Catch {
+                        Write-Output "Failed to stop and disable $OEMServiceDisplayName Service. Error: $_"
+                    }
                     Start-Sleep -s 5
                     $OEMServices = Get-WmiObject win32_service |
                     Select-Object Name,DisplayName,State,StartMode |
@@ -127,74 +153,30 @@ ForEach ($OEMApplication in $OEMApplications){
                     Where-Object {$_.State -ne "Stopped" -or $_.StartMode -ne "Disabled"} -ErrorAction SilentlyContinue
                 }
             }
-            Write-Output "$OEMServiceDisplayName Service has been Stopped and Disabled."
             Write-Output $NewLine
         }
 
         # Remove Registry Apps
         If ($null -ne $RegistryApps){
-            Write-Output "[ $OEMApplication Registry Applications Installed ]"
             ForEach ($RegistryApp in $RegistryApps){
                 $AppDisplayName = $RegistryApp.DisplayName
                 $AppGUID = $RegistryApp.PSChildName
-                Write-Output "Display Name: $AppDisplayName"
-
-                If ($null -ne $RegistryApp.QuietUninstallString){
-                    & $RegistryApp.QuietUninstallString
-                } ElseIf ($null -ne $RegistryApp.UninstallString){
-                    & $RegistryApp.UninstallString
-                } Else {
-                    Write-Output "Uninstall string not found for $AppDisplayName."
+                Write-Output "Uninstalling $AppDisplayName [Registry App]..."
+                Try {
+                    If ($null -ne $RegistryApp.QuietUninstallString){
+                        & $RegistryApp.QuietUninstallString -ErrorAction Stop
+                    } ElseIf ($null -ne $RegistryApp.UninstallString){
+                        Start-Process -FilePath $RegistryApp.UninstallString -ArgumentList "/silent" -NoNewWindow -RedirectStandardOutput $null -RedirectStandardError $null -Wait -ErrorAction Stop
+                    } Else {
+                        Write-Output "Uninstall string not found for $AppDisplayName."
+                    }
+                    Write-Output "Successfully uninstalled $AppDisplayName [Registry App]."
+                }
+                Catch {
+                    Write-Output "Failed to uninstall $AppDisplayName [Registry App]. Error: $_"
                 }
                 Write-Output $NewLine
             }
-        }
-    }
-}
-
-# Verify All Dell OEM Applications are Uninstalled
-$OEMApplications = "*Dell*"
-ForEach ($OEMApplication in $OEMApplications){
-    $RegistryApps = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-    Select-Object DisplayName, DisplayVersion, QuietUninstallString, UninstallString, PSChildName |
-    Where-Object {$_.DisplayName -Like $OEMApplication -And $_.DisplayName -NotMatch $OEMApplicationsToKeep}
-
-    $AppXProvisionedApps = Get-AppxProvisionedPackage -Online |
-    Where-Object {$_.DisplayName -Like $OEMApplication -And $_.DisplayName -NotMatch $OEMApplicationsToKeep}
-
-    $AppXPackageApps = Get-AppxPackage -AllUsers |
-    Where-Object {$_.Name -Like $OEMApplication -And $_.Name -NotMatch $OEMApplicationsToKeep}
-
-    $W32Apps = Get-Package |
-    Where-Object {$_.Name -Like $OEMApplication -And $_.Name -NotMatch $OEMApplicationsToKeep}
-
-    Write-Output "[ Verifying All $OEMApplication OEM Applications are Uninstalled. ]"
-
-    If (($null -eq $RegistryApps) -and ($null -eq $AppXProvisionedApps) -and ($null -eq $AppXPackageApps) -and ($null -eq $W32Apps)){
-        Write-Output "All $OEMApplication OEM Applications have been Successfully Uninstalled."
-        Write-Output $NewLine
-
-        Write-Output "[ Create Successful Registry Key for Detection Method. ]"
-    } Else {
-        Write-Output "$OEMApplication OEM Applications that Failed to Uninstall:"
-
-        ForEach ($RegistryApp in $RegistryApps){
-            Write-Output $RegistryApp.DisplayName
-        }
-
-        ForEach ($AppXProvisionedApp in $AppXProvisionedApps){
-            $AppXDisplayName = $AppXProvisionedApp.DisplayName
-            Write-Output "$AppXDisplayName [AppX Provisioned App]"
-        }
-
-        ForEach ($AppXPackageApp in $AppXPackageApps){
-            $AppXName = $AppXPackageApp.Name
-            Write-Output "$AppXName [AppX Package]"
-        }
-
-        ForEach ($W32App in $W32Apps){
-            $AppName = $W32App.Name
-            Write-Output "$AppName [W32 App]"
         }
     }
 }
