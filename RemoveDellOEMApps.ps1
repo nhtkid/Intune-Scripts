@@ -1,5 +1,5 @@
 # Define Log Path
-$ScriptVersion = "2.1"
+$ScriptVersion = "2.1.4"
 $DateTime = [DateTime]::Now.ToString("yyyyMMdd")
 $LogFile = "RemoveDellOEMApplications-" + $ScriptVersion + "_" + $DateTime + ".log"
 $LogPath = "C:\Windows\Logs"
@@ -95,18 +95,43 @@ ForEach ($OEMApplication in $OEMApplications){
             ForEach ($RegistryApp in $RegistryApps){
                 $AppDisplayName = $RegistryApp.DisplayName
                 $AppGUID = $RegistryApp.PSChildName
-                Try {
-                    If ($null -ne $RegistryApp.QuietUninstallString){
-                        & $RegistryApp.QuietUninstallString -ErrorAction Stop
-                    } ElseIf ($null -ne $RegistryApp.UninstallString){
-                        Start-Process -FilePath $RegistryApp.UninstallString -ArgumentList "/silent" -NoNewWindow -RedirectStandardOutput $null -RedirectStandardError $null -Wait -ErrorAction Stop
-                    } Else {
-                        Write-Output "$AppDisplayName ($AppGUID) - Uninstall string not found."
+                Write-Output "Attempting to uninstall: $AppDisplayName ($AppGUID)"
+                
+                If ($null -ne $RegistryApp.QuietUninstallString) {
+                    Write-Output "Using QuietUninstallString: $($RegistryApp.QuietUninstallString)"
+                    Try {
+                        Invoke-Expression $RegistryApp.QuietUninstallString -ErrorAction Stop
+                        Write-Output "$AppDisplayName ($AppGUID) - Successfully uninstalled using QuietUninstallString."
                     }
-                    Write-Output "$AppDisplayName ($AppGUID) - Successfully uninstalled [Registry App]."
-                }
-                Catch {
-                    Write-Output "$AppDisplayName ($AppGUID) - Failed to uninstall [Registry App]. Error: $_"
+                    Catch {
+                        Write-Output "$AppDisplayName ($AppGUID) - Failed to uninstall using QuietUninstallString. Error: $_"
+                    }
+                } ElseIf ($null -ne $RegistryApp.UninstallString) {
+                    Write-Output "Using UninstallString: $($RegistryApp.UninstallString)"
+                    If ($RegistryApp.UninstallString -like "MsiExec.exe*") {
+                        $productCode = $RegistryApp.UninstallString -replace ".*({.*}).*", '$1'
+                        $uninstallArgs = "/x $productCode /qn"
+                        Write-Output "Executing: MsiExec.exe $uninstallArgs"
+                        Try {
+                            Start-Process "MsiExec.exe" -ArgumentList $uninstallArgs -Wait -NoNewWindow -ErrorAction Stop
+                            Write-Output "$AppDisplayName ($AppGUID) - Successfully uninstalled using MsiExec."
+                        }
+                        Catch {
+                            Write-Output "$AppDisplayName ($AppGUID) - Failed to uninstall using MsiExec. Error: $_"
+                        }
+                    } Else {
+                        $uninstallCommand = "$($RegistryApp.UninstallString) /silent"
+                        Write-Output "Executing: $uninstallCommand"
+                        Try {
+                            Invoke-Expression $uninstallCommand -ErrorAction Stop
+                            Write-Output "$AppDisplayName ($AppGUID) - Successfully uninstalled using UninstallString with /silent."
+                        }
+                        Catch {
+                            Write-Output "$AppDisplayName ($AppGUID) - Failed to uninstall using UninstallString with /silent. Error: $_"
+                        }
+                    }
+                } Else {
+                    Write-Output "$AppDisplayName ($AppGUID) - Uninstall string not found."
                 }
             }
         }
