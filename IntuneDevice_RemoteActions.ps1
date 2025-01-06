@@ -101,36 +101,50 @@ foreach ($Device in $DeviceList) {
 # Connect to Microsoft Graph
 Connect-MsGraph
 
-# Prompt user for action type (with validation loop)
-do {
-    $actionChoice = Read-Host -Prompt @"
-Which action would you like to perform?
-1. Sync Device
-2. Reboot Device
-Enter your choice (1 or 2):
-"@
-    if ($actionChoice -notin @("1", "2")) {
-        Write-Host "Invalid input. Please select either '1' or '2'." -ForegroundColor Yellow
-    }
-} until ($actionChoice -in @("1", "2"))
-
-# Function to validate device or group IDs
-function Validate-DeviceOrGroup {
+# Function: Prompt user for a valid input from a set of choices
+function Prompt-ValidInput {
     param (
-        [Parameter(Mandatory = $true)]
+        [string]$PromptMessage,
+        [string[]]$ValidChoices
+    )
+    do {
+        $input = Read-Host -Prompt $PromptMessage
+        if ($input -notin $ValidChoices) {
+            Write-Host "Invalid input. Please select one of the following: $($ValidChoices -join ', ')." -ForegroundColor Yellow
+        }
+    } until ($input -in $ValidChoices)
+    return $input
+}
+
+# Function: Prompt for a non-negative integer (e.g., delay time)
+function Prompt-PositiveInteger {
+    param ([string]$PromptMessage)
+    do {
+        $input = Read-Host -Prompt $PromptMessage
+        if ($input -match '^\d+$') {
+            return [int]$input
+        } else {
+            Write-Host "Invalid input. Please enter a non-negative integer." -ForegroundColor Yellow
+        }
+    } until ($false) # Loop continues until valid input
+}
+
+# Function: Validate device or group IDs
+function Validate-Ids {
+    param (
         [string[]]$Ids,
-        [string]$Type
+        [string]$Type,
+        [object[]]$AllDevices
     )
     $ValidIds = @()
+    $InvalidIds = @()
+
     foreach ($Id in $Ids) {
         if ($Type -eq "device") {
             # Check if the device ID exists in Intune
-            $DeviceExists = $AllIntuneDevices | Where-Object { $_.azureADDeviceId -eq $Id }
-            if ($DeviceExists) {
-                $ValidIds += [PSCustomObject]@{ deviceId = $Id }
-            } else {
-                Write-Host "Device ID '$Id' not found in Intune." -ForegroundColor Yellow
-            }
+            $Device = $AllDevices | Where-Object { $_.azureADDeviceId -eq $Id }
+            if ($Device) { $ValidIds += [PSCustomObject]@{ deviceId = $Id } }
+            else { $InvalidIds += $Id }
         }
         elseif ($Type -eq "group") {
             # Check if the group ID exists in Azure AD
@@ -139,67 +153,59 @@ function Validate-DeviceOrGroup {
                 if ($GroupExists) {
                     $GroupDevices = Get-Groups_Members -groupId $Id -Select id, deviceId, displayName | Get-MSGraphAllPages
                     $ValidIds += $GroupDevices
-                }
+                } else { $InvalidIds += $Id }
             } catch {
-                Write-Host "Group ID '$Id' not found in Azure AD." -ForegroundColor Yellow
+                $InvalidIds += $Id
             }
         }
     }
-    return $ValidIds
+    return @{
+        ValidIds = $ValidIds
+        InvalidIds = $InvalidIds
+    }
 }
 
-# Loop until valid input is provided for target choice
-do {
-    $targetChoice = Read-Host -Prompt @"
+# Prompt user for action type
+$actionChoice = Prompt-ValidInput -PromptMessage @"
+Which action would you like to perform?
+1. Sync Device
+2. Reboot Device
+Enter your choice (1 or 2):
+"@ -ValidChoices @("1", "2")
+
+# Retrieve all Intune devices
+$AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId | Get-MSGraphAllPages
+
+# Prompt user for target (devices or groups)
+$targetChoice = Prompt-ValidInput -PromptMessage @"
 Please provide the target resource for the action:
 1. One or multiple Intune device IDs (comma-separated)
 2. One or multiple Azure group object IDs (comma-separated)
 Enter your choice (1 or 2):
-"@
-    if ($targetChoice -notin @("1", "2")) {
-        Write-Host "Invalid input. Please select either '1' or '2'." -ForegroundColor Yellow
-    }
-} until ($targetChoice -in @("1", "2"))
+"@ -ValidChoices @("1", "2")
 
-$DeviceList = @()
+$ValidDeviceList = @()
+$InvalidIds = @()
 $delayMinutes = 0
 
+# Process the selected target type
 switch ($targetChoice) {
     "1" {
-        do {
-            $DeviceIds = Read-Host -Prompt "Please provide the Intune device ID(s), separated by commas"
-            $DeviceList = Validate-DeviceOrGroup -Ids ($DeviceIds.Split(',').Trim()) -Type "device"
-            if (-not $DeviceList) {
-                Write-Host "No valid device IDs found. Please try again." -ForegroundColor Yellow
-            }
-        } until ($DeviceList.Count -gt 0)
+        $DeviceIds = Read-Host -Prompt "Provide the Intune device ID(s), separated by commas"
+        $ValidationResult = Validate-Ids -Ids ($DeviceIds.Split(',').Trim()) -Type "device" -AllDevices $AllIntuneDevices
+        $ValidDeviceList = $ValidationResult.ValidIds
+        $InvalidIds = $ValidationResult.InvalidIds
     }
     "2" {
-        do {
-            $DeviceGroups = Read-Host -Prompt "Please provide the Azure group object ID(s), separated by commas"
-            $DeviceList = Validate-DeviceOrGroup -Ids ($DeviceGroups.Split(',').Trim()) -Type "group"
-            if (-not $DeviceList) {
-                Write-Host "No valid group IDs or devices in the group were found. Please try again." -ForegroundColor Yellow
-            }
-        } until ($DeviceList.Count -gt 0)
+        $GroupIds = Read-Host -Prompt "Provide the Azure group object ID(s), separated by commas"
+        $ValidationResult = Validate-Ids -Ids ($GroupIds.Split(',').Trim()) -Type "group" -AllDevices $AllIntuneDevices
+        $ValidDeviceList = $ValidationResult.ValidIds
+        $InvalidIds = $ValidationResult.InvalidIds
 
-        # Prompt for delay
-        $validInput = $false
-        while (-not $validInput) {
-            $delayInput = Read-Host -Prompt "Enter delay time in minutes (0 for immediate execution)"
-            if ($delayInput -match '^\d+$') {
-                $delayMinutes = [int]$delayInput
-                $validInput = $true
-            }
-            else {
-                Write-Host "Invalid input. Please enter a valid number." -ForegroundColor Yellow
-            }
-        }
+        # Prompt user for delay time
+        $delayMinutes = Prompt-PositiveInteger -PromptMessage "Enter delay time in minutes (0 for immediate execution)"
     }
 }
-
-# Retrieve all Intune devices
-$AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId | Get-MSGraphAllPages
 
 # Apply delay if specified
 if ($delayMinutes -gt 0) {
@@ -207,29 +213,33 @@ if ($delayMinutes -gt 0) {
     Start-Sleep -Seconds ($delayMinutes * 60)
 }
 
-# Perform the selected action on each device in the list
+# Display invalid IDs
+if ($InvalidIds.Count -gt 0) {
+    Write-Host "`nThe following IDs are invalid and will be skipped:" -ForegroundColor Red
+    foreach ($InvalidId in $InvalidIds) {
+        Write-Host "❌ $InvalidId" -ForegroundColor Yellow
+    }
+}
+
+# Perform the selected action on valid devices
 Write-Host "`n--- Starting Action Execution ---`n" -ForegroundColor Cyan
 
-foreach ($Device in $DeviceList) {
-    $deviceIntuneID = $AllIntuneDevices | Where-Object {$_.azureADDeviceId -eq $Device.deviceId}
-    if ($deviceIntuneID.id) {
+foreach ($Device in $ValidDeviceList) {
+    $DeviceIntune = $AllIntuneDevices | Where-Object { $_.azureADDeviceId -eq $Device.deviceId }
+    if ($DeviceIntune.id) {
         switch ($actionChoice) {
             "1" {
-                # Sync Device
-                Invoke-DeviceManagement_ManagedDevices_SyncDevice -managedDeviceId $deviceIntuneID.id
+                Invoke-DeviceManagement_ManagedDevices_SyncDevice -managedDeviceId $DeviceIntune.id
                 Write-Host "✅ Sync command sent to device ID: $($Device.deviceId)" -ForegroundColor Green
             }
             "2" {
-                # Reboot Device
-                Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $deviceIntuneID.id
+                Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $DeviceIntune.id
                 Write-Host "✅ Reboot command sent to device ID: $($Device.deviceId)" -ForegroundColor Yellow
             }
         }
-    }
-    else {
+    } else {
         Write-Host "❌ Device ID '$($Device.deviceId)' not found in Intune." -ForegroundColor Red
     }
 }
 
 Write-Host "`n--- Action Execution Completed ---`n" -ForegroundColor Cyan
-
