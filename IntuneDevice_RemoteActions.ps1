@@ -165,6 +165,9 @@ function Validate-Ids {
     }
 }
 
+# Retrieve all Intune devices before user prompts to minimize waiting time
+$AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId | Get-MSGraphAllPages
+
 # Prompt user for action type
 $actionChoice = Prompt-ValidInput -PromptMessage @"
 Which action would you like to perform?
@@ -172,9 +175,6 @@ Which action would you like to perform?
 2. Reboot Device
 Enter your choice (1 or 2):
 "@ -ValidChoices @("1", "2")
-
-# Retrieve all Intune devices
-$AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId | Get-MSGraphAllPages
 
 # Prompt user for target (devices or groups)
 $targetChoice = Prompt-ValidInput -PromptMessage @"
@@ -191,12 +191,33 @@ $delayMinutes = 0
 # Process the selected target type
 switch ($targetChoice) {
     "1" {
+        # Option 1: Direct Device IDs
         $DeviceIds = Read-Host -Prompt "Provide the Intune device ID(s), separated by commas"
-        $ValidationResult = Validate-Ids -Ids ($DeviceIds.Split(',').Trim()) -Type "device" -AllDevices $AllIntuneDevices
-        $ValidDeviceList = $ValidationResult.ValidIds
-        $InvalidIds = $ValidationResult.InvalidIds
+        $DeviceIdsArray = $DeviceIds.Split(',').Trim()
+
+        # Display invalid device IDs during execution
+        Write-Host "`n--- Starting Action Execution for Provided Devices ---`n" -ForegroundColor Cyan
+        foreach ($deviceId in $DeviceIdsArray) {
+            # Check if the device exists in Intune before executing the action
+            $DeviceIntune = $AllIntuneDevices | Where-Object { $_.azureADDeviceId -eq $deviceId }
+            if ($DeviceIntune.id) {
+                switch ($actionChoice) {
+                    "1" {
+                        Invoke-DeviceManagement_ManagedDevices_SyncDevice -managedDeviceId $DeviceIntune.id
+                        Write-Host "✅ Sync command sent to device ID: $($deviceId)" -ForegroundColor Green
+                    }
+                    "2" {
+                        Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $DeviceIntune.id
+                        Write-Host "✅ Reboot command sent to device ID: $($deviceId)" -ForegroundColor Yellow
+                    }
+                }
+            } else {
+                Write-Host "❌ Device ID '$deviceId' not found in Intune." -ForegroundColor Red
+            }
+        }
     }
     "2" {
+        # Option 2: Device IDs from Groups
         $GroupIds = Read-Host -Prompt "Provide the Azure group object ID(s), separated by commas"
         $ValidationResult = Validate-Ids -Ids ($GroupIds.Split(',').Trim()) -Type "group" -AllDevices $AllIntuneDevices
         $ValidDeviceList = $ValidationResult.ValidIds
@@ -207,8 +228,8 @@ switch ($targetChoice) {
     }
 }
 
-# Apply delay if specified
-if ($delayMinutes -gt 0) {
+# Apply delay if specified (only for groups, not devices)
+if ($delayMinutes -gt 0 -and $targetChoice -eq "2") {
     Write-Host "`nWaiting for $delayMinutes minutes before execution..." -ForegroundColor Yellow
     Start-Sleep -Seconds ($delayMinutes * 60)
 }
@@ -243,3 +264,4 @@ foreach ($Device in $ValidDeviceList) {
 }
 
 Write-Host "`n--- Action Execution Completed ---`n" -ForegroundColor Cyan
+
