@@ -101,19 +101,18 @@ foreach ($Device in $DeviceList) {
 # Connect to Microsoft Graph
 Connect-MsGraph
 
-# Prompt user for action type
-$actionChoice = Read-Host -Prompt @"
+# Prompt user for action type (with validation loop)
+do {
+    $actionChoice = Read-Host -Prompt @"
 Which action would you like to perform?
 1. Sync Device
 2. Reboot Device
 Enter your choice (1 or 2):
 "@
-
-# Validate action choice
-if ($actionChoice -notin @("1", "2")) {
-    Write-Host "Invalid action choice. Exiting script." -ForegroundColor Red
-    exit
-}
+    if ($actionChoice -notin @("1", "2")) {
+        Write-Host "Invalid input. Please select either '1' or '2'." -ForegroundColor Yellow
+    }
+} until ($actionChoice -in @("1", "2"))
 
 # Function to validate device or group IDs
 function Validate-DeviceOrGroup {
@@ -157,6 +156,9 @@ Please provide the target resource for the action:
 2. One or multiple Azure group object IDs (comma-separated)
 Enter your choice (1 or 2):
 "@
+    if ($targetChoice -notin @("1", "2")) {
+        Write-Host "Invalid input. Please select either '1' or '2'." -ForegroundColor Yellow
+    }
 } until ($targetChoice -in @("1", "2"))
 
 $DeviceList = @()
@@ -230,3 +232,4 @@ foreach ($Device in $DeviceList) {
 }
 
 Write-Host "`n--- Action Execution Completed ---`n" -ForegroundColor Cyan
+
