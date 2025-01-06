@@ -1,5 +1,5 @@
 # This script allows for management of Intune devices, either individually or in groups.
-# It can perform various actions on iOS devices managed by Intune.
+# It can perform various actions on Intune devices.
 
 # Possible actions for Invoke-DeviceManagement_ManagedDevices:
 # - Invoke-DeviceManagement_ManagedDevices_RebootNow: Reboots the device
@@ -12,11 +12,10 @@
 
 # Connect to Microsoft Graph
 Connect-MsGraph
-
 # Prompt user for action target
 $choice = Read-Host -Prompt "Please provide the target resource for the action:
-1. One or multiple Intune device's Azure device ids (comma-separated)
-2. An Azure group object id
+1. One or multiple Intune device ids (comma-separated)
+2. One or multiple Azure group object ids (comma-separated)
 Enter your choice (1 or 2)"
 
 # Process user's choice
@@ -30,10 +29,16 @@ switch ($choice) {
         }
     }
     "2" {
-        # Option 2: Device group
-        $Devicegroup = Read-Host -Prompt "Please provide the group object ID"
-        # Retrieve all devices in the specified group
-        $DeviceList = Get-Groups_Members -groupId $Devicegroup -Select id, deviceId, displayName | Get-MSGraphAllPages
+        # Option 2: Multiple device groups
+        $DeviceGroups = Read-Host -Prompt "Please provide the group object ID(s), separated by commas"
+        $DeviceList = @()
+        
+        # Process each group
+        foreach ($GroupId in $DeviceGroups.Split(',').Trim()) {
+            # Retrieve all devices in the current group
+            $GroupDevices = Get-Groups_Members -groupId $GroupId -Select id, deviceId, displayName | Get-MSGraphAllPages
+            $DeviceList += $GroupDevices
+        }
     }
     default {
         # Invalid choice
