@@ -32,12 +32,20 @@ switch ($choice) {
     "2" {
         # Option 2: Multiple device groups
         $DeviceGroups = Read-Host -Prompt "Please provide the group object ID(s), separated by commas"
-        $delayMinutes = Read-Host -Prompt "Enter delay time in minutes (0 for immediate execution)"
         
-        # Validate delay input
-        if (-not [int]::TryParse($delayMinutes, [ref]$null)) {
-            Write-Host "Invalid delay time. Please enter a number. Exiting script." -ForegroundColor Red
-            exit
+        # Loop until valid delay input is received
+        $validInput = $false
+        $delayMinutes = 0
+        
+        while (-not $validInput) {
+            $delayInput = Read-Host -Prompt "Enter delay time in minutes (0 for immediate execution)"
+            if ($delayInput -match '^\d+$') {
+                $delayMinutes = [int]$delayInput
+                $validInput = $true
+            }
+            else {
+                Write-Host "Number Only" -ForegroundColor Yellow
+            }
         }
         
         $DeviceList = @()
