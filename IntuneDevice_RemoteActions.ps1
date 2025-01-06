@@ -15,18 +15,19 @@ Connect-MsGraph
 
 # Prompt user for action target
 $choice = Read-Host -Prompt "Please provide the target resource for the action:
-1. A single Intune device id
+1. One or multiple Intune device's Azure device ids (comma-separated)
 2. An Azure group object id
-
 Enter your choice (1 or 2)"
 
 # Process user's choice
 switch ($choice) {
     "1" {
-        # Option 1: Single device
-        $DeviceId = Read-Host -Prompt "Please provide the Intune device id"
-        # Create a single-element array for consistency with group processing
-        $DeviceList = @([PSCustomObject]@{deviceId = $DeviceId})
+        # Option 1: Single or multiple devices
+        $DeviceIds = Read-Host -Prompt "Please provide the Intune device id(s), separated by commas"
+        # Split the input string and create array of device objects
+        $DeviceList = $DeviceIds.Split(',').Trim() | ForEach-Object {
+            [PSCustomObject]@{deviceId = $_}
+        }
     }
     "2" {
         # Option 2: Device group
@@ -43,16 +44,13 @@ switch ($choice) {
 
 # Retrieve all iOS devices managed by Intune
 $AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId -Filter "contains(operatingSystem,'iOS')" | Get-MSGraphAllPages
-
 Write-Host "`n"
 
 # Process each device in the list
 foreach ($Device in $DeviceList) {
     # Find the corresponding Intune device
     $deviceIntuneID = $AllIntuneDevices | Where-Object {$_.azureADDeviceId -eq $Device.deviceId}
-
     Write-Host $Device.deviceId
-
     if ($deviceIntuneID.id) {
         # Device found, perform action (in this case, reboot)
         Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $deviceIntuneID.id
