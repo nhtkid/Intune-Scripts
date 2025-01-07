@@ -207,6 +207,9 @@ if ($delayMinutes -gt 0) {
     Start-Sleep -Seconds ($delayMinutes * 60)
 }
 
+# Initialize counter for successful commands
+$successfulCommands = 0
+
 # Process each device in the list
 foreach ($Device in $DeviceList) {
     # Find the corresponding Intune device
@@ -223,6 +226,7 @@ foreach ($Device in $DeviceList) {
             Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $deviceIntuneID.id
             Write-Host "Reboot command has been sent to the device" -ForegroundColor Yellow
         }
+        $successfulCommands++
     }
     else {
         # Track invalid device ID
@@ -231,14 +235,23 @@ foreach ($Device in $DeviceList) {
     }
 }
 
-# Summary of invalid IDs
+# Summary of execution
 Write-Host "`nExecution Summary:" -ForegroundColor Cyan
+# Display command summary
+if ($action -eq "1") {
+    Write-Host "Sync command has been sent to $successfulCommands devices" -ForegroundColor Green
+}
+else {
+    Write-Host "Reboot command has been sent to $successfulCommands devices" -ForegroundColor Green
+}
+
+# Summary of invalid IDs
 if ($invalidDeviceIds) {
-    Write-Host "The following device IDs were invalid:" -ForegroundColor Red
+    Write-Host "`nThe following device IDs were invalid:" -ForegroundColor Red
     $invalidDeviceIds | ForEach-Object { Write-Host "- $_" -ForegroundColor Red }
 }
 if ($invalidGroupIds) {
-    Write-Host "The following group IDs were invalid:" -ForegroundColor Red
+    Write-Host "`nThe following group IDs were invalid:" -ForegroundColor Red
     $invalidGroupIds | ForEach-Object { Write-Host "- $_" -ForegroundColor Red }
 }
 if (-not $invalidDeviceIds -and -not $invalidGroupIds) {
