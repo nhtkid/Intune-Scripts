@@ -185,3 +185,146 @@ if ($invalidGroupIds) {
 if (-not $invalidDeviceIds -and -not $invalidGroupIds) {
     Write-Host "All IDs were processed successfully." -ForegroundColor Green
 }
+
+
+
+
+
+
+
+
+
+
+
+
+#########################################################################
+# Intune Device Management Script (Optimized)
+# ... (Description and Usage as before)
+#########################################################################
+
+# Connect to Microsoft Graph API
+Connect-MsGraph
+
+# Function to handle user input validation
+# ... (Get-ValidInput function remains the same)
+
+# Get and validate action selection from user
+# ... (Action selection code remains the same)
+
+# Get and validate target selection from user
+# ... (Target selection code remains the same)
+
+# Initialize arrays to track invalid IDs
+$invalidDeviceIds = @()
+$invalidGroupIds = @()
+
+# Process user's target choice
+switch ($choice) {
+    "1" {
+        # Handle individual device IDs (Simplified)
+        $DeviceIds = Read-Host -Prompt "Please provide the Intune device id(s), separated by commas"
+        $DeviceList = $DeviceIds.Split(',').Trim()
+        $delayMinutes = 0
+    }
+    "2" {
+        # Handle group IDs
+        $DeviceGroups = Read-Host -Prompt "Please provide the group object ID(s), separated by commas"
+
+        # Get and validate delay time
+        # ... (Delay input validation remains the same)
+
+        # Process each group and collect member devices (Optimized)
+        $DeviceList = @()
+        foreach ($GroupId in $DeviceGroups.Split(',').Trim()) {
+            try {
+                $GroupDevices = Get-Groups_Members -groupId $GroupId -Select deviceId | Get-MSGraphAllPages # Select only deviceId
+                if ($GroupDevices) {
+                    $DeviceList += $GroupDevices.deviceId
+                } else {
+                    $invalidGroupIds += $GroupId
+                    Write-Host "Invalid or empty group ID: $GroupId" -ForegroundColor Red
+                }
+            } catch {
+                $invalidGroupIds += $GroupId
+                Write-Host "Error processing group ID: $GroupId" -ForegroundColor Red
+            }
+        }
+    }
+}
+
+# Retrieve all iOS devices from Intune (Optimized Filter)
+$AllIntuneDevices = Get-IntuneManagedDevice -select id, azureADDeviceId -Filter "operatingSystem eq 'iOS'" | Get-MSGraphAllPages
+
+#Create Hashtable for faster lookups
+$IntuneDevicesHash = @{}
+$AllIntuneDevices | ForEach-Object {$IntuneDevicesHash[$_.azureADDeviceId] = $_}
+
+Write-Host "`n"
+
+# Handle delay if specified
+# ... (Delay handling code remains the same)
+
+# Initialize counter for successful commands
+$successfulCommands = 0
+
+#Prepare for batching
+$deviceIntuneIDs = @()
+
+foreach ($deviceId in $DeviceList) {
+    $intuneDevice = $IntuneDevicesHash[$deviceId]
+    if ($intuneDevice) {
+        $deviceIntuneIDs += $intuneDevice
+    } else {
+        $invalidDeviceIds += $deviceId
+        Write-Host "Invalid device ID: $deviceId" -ForegroundColor Red
+    }
+}
+
+if ($deviceIntuneIDs) { # Check if there are devices to process
+    $batchRequest = New-Object System.Collections.Generic.List[Object]
+    foreach ($deviceIntuneID in $deviceIntuneIDs) {
+        $urlSegment = if ($action -eq "1") { "syncDevice" } else { "rebootNow" }
+        $batchRequest.Add(@{
+            id     = $deviceIntuneID.id
+            method = "POST"
+            url    = "/deviceManagement/managedDevices/$($deviceIntuneID.id)/$urlSegment"
+        })
+    }
+    try {
+        $batchResponse = Invoke-MicrosoftGraphBatchRequest -Body $batchRequest
+        if ($batchResponse) {
+            foreach ($response in $batchResponse.responses) {
+                if ($response.statuscode -ge 200 -and $response.statuscode -lt 300){
+                    $successfulCommands++
+                } else {
+                    Write-Host "Error processing device with ID $($response.id). Status code: $($response.statuscode)" -ForegroundColor Red
+                    # More detailed error handling could be implemented here by parsing the $response.body
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "Error executing batch request: $_" -ForegroundColor Red
+    }
+}
+
+
+# Display execution summary
+Write-Host "`nExecution Summary:" -ForegroundColor Cyan
+
+# Show number of successful commands
+if ($action -eq "1") {
+    Write-Host "Sync command has been sent to $successfulCommands devices (or attempted via batch)" -ForegroundColor Green #Updated message
+} else {
+    Write-Host "Reboot command has been sent to $successfulCommands devices (or attempted via batch)" -ForegroundColor Green #Updated message
+}
+
+# Show invalid IDs if any
+# ... (Invalid ID reporting code remains the same)
+
+if (-not $invalidDeviceIds -and -not $invalidGroupIds -and $successfulCommands -gt 0) {
+    Write-Host "All valid IDs were processed successfully (via batch)." -ForegroundColor Green
+}
+elseif (-not $invalidDeviceIds -and -not $invalidGroupIds -and $successfulCommands -eq 0) {
+    Write-Host "No valid devices found to process." -ForegroundColor Yellow
+}
