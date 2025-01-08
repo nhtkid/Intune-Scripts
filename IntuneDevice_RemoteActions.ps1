@@ -9,102 +9,193 @@
 # - Invoke-DeviceManagement_ManagedDevices_SyncDevice: Syncs device information
 # - Invoke-DeviceManagement_ManagedDevices_WindowsDefenderScan: Initiates a Windows Defender scan (for Windows devices)
 
-# Connect to Microsoft Graph
+
+#########################################################################
+# Intune Device Management Script
+# 
+# This script provides functionality to manage iOS devices in Microsoft Intune
+#########################################################################
+
+# Import required modules and establish connection
+if (-not (Get-Module -Name Microsoft.Graph.Intune)) {
+    Install-Module -Name Microsoft.Graph.Intune -Force
+}
+Import-Module Microsoft.Graph.Intune
 Connect-MsGraph
 
-# Prompt user for action selection
-$action = Read-Host -Prompt "Please select the action to perform:
-1. Sync Device
-2. Reboot Device
-Enter your choice (1 or 2)"
-
-# Validate action selection
-if ($action -notin '1', '2') {
-    Write-Host "Invalid action choice. Exiting script." -ForegroundColor Red
-    exit
+# Define enum for actions to improve type safety
+enum DeviceAction {
+    Sync = 1
+    Reboot = 2
 }
 
-# Prompt user for action target
-$choice = Read-Host -Prompt "Please provide the target resource for the action:
+enum TargetType {
+    Device = 1
+    Group = 2
+}
+
+# Function to handle user input validation with improved type safety
+function Get-ValidInput {
+    param (
+        [string]$prompt,
+        [string[]]$validOptions,
+        [string]$errorMessage = "Invalid input. Please try again."
+    )
+    do {
+        $input = Read-Host -Prompt $prompt
+        if ($input -in $validOptions) {
+            return $input
+        }
+        Write-Host $errorMessage -ForegroundColor Yellow
+    } while ($true)
+}
+
+# Function to process devices with improved error handling
+function Invoke-DeviceAction {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$deviceId,
+        [Parameter(Mandatory=$true)]
+        [DeviceAction]$action
+    )
+    
+    try {
+        switch ($action) {
+            ([DeviceAction]::Sync) {
+                Invoke-DeviceManagement_ManagedDevices_SyncDevice -managedDeviceId $deviceId
+                Write-Host "Sync command sent to device: $deviceId" -ForegroundColor Green
+                return $true
+            }
+            ([DeviceAction]::Reboot) {
+                Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $deviceId
+                Write-Host "Reboot command sent to device: $deviceId" -ForegroundColor Green
+                return $true
+            }
+        }
+    }
+    catch {
+        Write-Host "Error processing device $deviceId : $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Function to get devices from group with pagination handling
+function Get-GroupDevices {
+    param (
+        [string]$groupId
+    )
+    
+    try {
+        $devices = @()
+        $pageSize = 999  # Optimize page size for better performance
+        $devices = Get-Groups_Members -groupId $groupId -Select id, deviceId, displayName -Top $pageSize | 
+                  Get-MSGraphAllPages
+        return $devices
+    }
+    catch {
+        Write-Host "Error retrieving devices from group $groupId : $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Get action selection
+$actionChoice = [DeviceAction][int](Get-ValidInput -prompt @"
+Please select the action to perform:
+1. Sync Device
+2. Reboot Device
+Enter your choice (1 or 2)
+"@ -validOptions @('1', '2'))
+
+# Get target selection
+$targetChoice = [TargetType][int](Get-ValidInput -prompt @"
+Please provide the target resource for the action:
 1. One or multiple Intune device ids (comma-separated)
 2. One or multiple Azure group object ids (comma-separated)
-Enter your choice (1 or 2)"
+Enter your choice (1 or 2)
+"@ -validOptions @('1', '2'))
 
-# Process user's choice
-switch ($choice) {
-    "1" {
-        # Option 1: Single or multiple devices
-        $DeviceIds = Read-Host -Prompt "Please provide the Intune device id(s), separated by commas"
-        # Split the input string and create array of device objects
-        $DeviceList = $DeviceIds.Split(',').Trim() | ForEach-Object {
-            [PSCustomObject]@{deviceId = $_}
-        }
-        $delayMinutes = 0
+# Initialize result tracking
+$results = @{
+    SuccessfulCommands = 0
+    InvalidDeviceIds = @()
+    InvalidGroupIds = @()
+    ProcessedDevices = @()
+}
+
+# Get all iOS devices once to improve performance
+$AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId -Filter "contains(operatingSystem,'iOS')" | 
+                    Get-MSGraphAllPages
+
+# Process based on target choice
+switch ($targetChoice) {
+    ([TargetType]::Device) {
+        $DeviceIds = (Read-Host -Prompt "Please provide the Intune device id(s), separated by commas").Split(',').Trim()
+        $results.ProcessedDevices = $DeviceIds | ForEach-Object { @{deviceId = $_} }
     }
-    "2" {
-        # Option 2: Multiple device groups
-        $DeviceGroups = Read-Host -Prompt "Please provide the group object ID(s), separated by commas"
+    ([TargetType]::Group) {
+        $GroupIds = (Read-Host -Prompt "Please provide the group object ID(s), separated by commas").Split(',').Trim()
         
-        # Loop until valid delay input is received
-        $validInput = $false
+        # Validate and get delay time
         $delayMinutes = 0
-        
-        while (-not $validInput) {
+        do {
             $delayInput = Read-Host -Prompt "Enter delay time in minutes (0 for immediate execution)"
             if ($delayInput -match '^\d+$') {
                 $delayMinutes = [int]$delayInput
-                $validInput = $true
+                break
+            }
+            Write-Host "Please enter a valid number" -ForegroundColor Yellow
+        } while ($true)
+        
+        # Process groups
+        foreach ($groupId in $GroupIds) {
+            $groupDevices = Get-GroupDevices -groupId $groupId
+            if ($groupDevices) {
+                $results.ProcessedDevices += $groupDevices
             }
             else {
-                Write-Host "Number Only" -ForegroundColor Yellow
+                $results.InvalidGroupIds += $groupId
             }
         }
         
-        $DeviceList = @()
-        # Process each group
-        foreach ($GroupId in $DeviceGroups.Split(',').Trim()) {
-            # Retrieve all devices in the current group
-            $GroupDevices = Get-Groups_Members -groupId $GroupId -Select id, deviceId, displayName | Get-MSGraphAllPages
-            $DeviceList += $GroupDevices
+        # Handle delay if specified
+        if ($delayMinutes -gt 0) {
+            Write-Host "Waiting for $delayMinutes minutes before execution..." -ForegroundColor Yellow
+            Start-Sleep -Seconds ($delayMinutes * 60)
         }
     }
-    default {
-        # Invalid choice
-        Write-Host "Invalid choice. Exiting script." -ForegroundColor Red
-        exit
-    }
 }
 
-# Retrieve all iOS devices managed by Intune
-$AllIntuneDevices = Get-IntuneManagedDevice -select id, operatingSystem, azureADDeviceId -Filter "contains(operatingSystem,'iOS')" | Get-MSGraphAllPages
-Write-Host "`n"
-
-# Apply delay if specified
-if ($delayMinutes -gt 0) {
-    Write-Host "Waiting for $delayMinutes minutes before execution..." -ForegroundColor Yellow
-    Start-Sleep -Seconds ($delayMinutes * 60)
-}
-
-# Process each device in the list
-foreach ($Device in $DeviceList) {
-    # Find the corresponding Intune device
-    $deviceIntuneID = $AllIntuneDevices | Where-Object {$_.azureADDeviceId -eq $Device.deviceId}
-    Write-Host $Device.deviceId
+# Process devices
+foreach ($device in $results.ProcessedDevices) {
+    $deviceIntuneID = $AllIntuneDevices | Where-Object {$_.azureADDeviceId -eq $device.deviceId}
+    
     if ($deviceIntuneID.id) {
-        # Execute selected action
-        if ($action -eq "1") {
-            Invoke-DeviceManagement_ManagedDevices_SyncDevice -managedDeviceId $deviceIntuneID.id
-            Write-Host "Sync command has been sent to the device" -ForegroundColor Yellow
-        }
-        else {
-            Invoke-DeviceManagement_ManagedDevices_RebootNow -managedDeviceId $deviceIntuneID.id
-            Write-Host "Reboot command has been sent to the device" -ForegroundColor Yellow
+        if (Invoke-DeviceAction -deviceId $deviceIntuneID.id -action $actionChoice) {
+            $results.SuccessfulCommands++
         }
     }
     else {
-        # Device not found
-        Write-Host "$($Device.deviceId) not found" -ForegroundColor Red
+        $results.InvalidDeviceIds += $device.deviceId
     }
+}
+
+# Display execution summary with improved formatting
+Write-Host "`nExecution Summary:" -ForegroundColor Cyan
+$actionName = $actionChoice -eq [DeviceAction]::Sync ? "Sync" : "Reboot"
+Write-Host "$actionName command sent to $($results.SuccessfulCommands) devices" -ForegroundColor Green
+
+if ($results.InvalidDeviceIds) {
+    Write-Host "`nInvalid device IDs:" -ForegroundColor Red
+    $results.InvalidDeviceIds | ForEach-Object { Write-Host "- $_" -ForegroundColor Red }
+}
+
+if ($results.InvalidGroupIds) {
+    Write-Host "`nInvalid group IDs:" -ForegroundColor Red
+    $results.InvalidGroupIds | ForEach-Object { Write-Host "- $_" -ForegroundColor Red }
+}
+
+if (-not $results.InvalidDeviceIds -and -not $results.InvalidGroupIds) {
+    Write-Host "All IDs processed successfully." -ForegroundColor Green
 }
 
 
