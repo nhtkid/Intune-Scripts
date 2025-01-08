@@ -13,7 +13,8 @@
     - Execution summary showing successful operations and invalid IDs
     
     Requirement:
-    - Install Microsoft Graph Modules
+    - Install-Module AzureAD
+    - Install-Module Microsoft.Graph.Intune
     - Appropriate Intune administration rights
     
     Possible actions for Invoke-DeviceManagement_ManagedDevices:
