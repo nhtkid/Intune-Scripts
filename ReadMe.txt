@@ -8,11 +8,9 @@
       1) Show Members  
       2) Add Members  
       3) Remove Members  
-  • Show Members:  
-      – `*` shows all members (with optional page size)  
-      – otherwise treats each input term as a partial‐match filter against DisplayName, EmployeeNumber, or Email  
-  • Add/Remove: accepts a list of identifiers, continues on errors  
-  • Outputs aligned columns for DisplayName, EmployeeNumber, Email, Department  
+  • Show Members supports `*` or partial-match terms  
+  • Add/Remove continues on errors  
+  • Outputs aligned columns for Status, DisplayName, EmployeeNumber, Email, Department  
   • Color-coded feedback + summary
 
 .NOTES
@@ -22,28 +20,26 @@
 
 Import-Module ActiveDirectory
 
-# --- resolve user by email or SamAccountName ---
 function Get-ADUserByIdentifier {
     param([string]$Identifier)
     $props = 'DisplayName','EmployeeNumber','Mail','Department','MemberOf'
     if ($Identifier -match '@') {
         return Get-ADUser -Filter "Mail -eq '$Identifier'" -Properties $props -ErrorAction SilentlyContinue
-    }
-    else {
+    } else {
         return Get-ADUser -Identity $Identifier -Properties $props -ErrorAction SilentlyContinue
     }
 }
 
-# --- column formats: 45,15,50,20 ---
-$fmtHeader = "{0,-45} {1,-15} {2,-50} {3,-20}"
-$fmtRow    = "{0,-45} {1,-15} {2,-50} {3,-20}"
+# --- column formats: 45,15,50,20 + status prefix width 15 ---
+$fmtStatus = "{0,-15}"
+$fmtData   = "{0,-45} {1,-15} {2,-50} {3,-20}"
+$fmtRow    = $fmtStatus + " " + $fmtData
 
 function Show-Members {
     param(
         [string]   $GroupName,
         [string[]] $Terms
     )
-
     $showAll = $Terms -contains '*'
     $groupDN = (Get-ADGroup -Identity $GroupName -ErrorAction Stop).DistinguishedName
 
@@ -52,8 +48,8 @@ function Show-Members {
         if ($pageSize -and ($pageSize -as [int]) -gt 0) { $pageSize = [int]$pageSize } else { $pageSize = 0 }
 
         Write-Host "`nStreaming all members of '$GroupName':" -ForegroundColor Cyan
-        Write-Host ($fmtHeader -f 'DisplayName','Emp#','Email','Department') -ForegroundColor Gray
-        Write-Host ("=" * 130) -ForegroundColor Gray
+        Write-Host ($fmtData -f 'DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
+        Write-Host ("=" * 140) -ForegroundColor Gray
 
         $count = 0
         Get-ADGroupMember -Identity $GroupName | ForEach-Object {
@@ -62,10 +58,10 @@ function Show-Members {
             $en = if ($u.EmployeeNumber){ $u.EmployeeNumber} else { 'N/A' }
             $em = if ($u.Mail)          { $u.Mail }           else { 'N/A' }
             $dp = if ($u.Department)    { $u.Department }     else { 'N/A' }
-            Write-Host ($fmtRow -f $dn,$en,$em,$dp)
+            Write-Host ($fmtData -f $dn,$en,$em,$dp)
             $count++
             if ($pageSize -gt 0 -and ($count % $pageSize) -eq 0) {
-                Write-Host ("-" * 130) -ForegroundColor Gray
+                Write-Host ("-" * 140) -ForegroundColor Gray
             }
         }
 
@@ -73,16 +69,13 @@ function Show-Members {
         return
     }
 
-    # partial‐match search
     Write-Host "`nSearching group '$GroupName' for terms: $($Terms -join ', ')" -ForegroundColor Cyan
-
-    # cache full membership once
     $allMembers = Get-ADGroupMember -Identity $GroupName -Recursive |
                   Get-ADUser -Properties DisplayName,EmployeeNumber,Mail,Department |
                   Select-Object DisplayName,EmployeeNumber,Mail,Department
 
-    Write-Host ($fmtHeader -f 'DisplayName','Emp#','Email','Department') -ForegroundColor Gray
-    Write-Host ("=" * 130) -ForegroundColor Gray
+    Write-Host ($fmtData -f 'DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
+    Write-Host ("=" * 140) -ForegroundColor Gray
 
     $totalFound = 0
     $noMatch    = @()
@@ -90,7 +83,7 @@ function Show-Members {
     foreach ($term in $Terms) {
         $pattern = "*$term*"
         $matches = $allMembers | Where-Object {
-            $_.DisplayName   -like $pattern -or
+            $_.DisplayName    -like $pattern -or
             $_.EmployeeNumber -like $pattern -or
             $_.Mail           -like $pattern
         }
@@ -101,19 +94,18 @@ function Show-Members {
                 $en = if ($u.EmployeeNumber){ $u.EmployeeNumber} else { 'N/A' }
                 $em = if ($u.Mail)          { $u.Mail }           else { 'N/A' }
                 $dp = if ($u.Department)    { $u.Department }     else { 'N/A' }
-                Write-Host ($fmtRow -f $dn,$en,$em,$dp)
+                Write-Host ($fmtData -f $dn,$en,$em,$dp)
                 $totalFound++
             }
         }
         else {
-            Write-Host "✗ No matches for '$term'" -ForegroundColor Yellow
+            Write-Host ($fmtRow -f "✗ No match:", $term, '', '', '') -ForegroundColor Yellow
             $noMatch += $term
         }
     }
 
-    # summary
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Total matched: $totalFound"                                -ForegroundColor Green
+    Write-Host "Total matched: $totalFound" -ForegroundColor Green
     if ($noMatch) { Write-Host "No matches for: $($noMatch -join ', ')" -ForegroundColor Yellow }
 }
 
@@ -126,38 +118,44 @@ function Add-Members {
 
     $existing = @{}; Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
 
-    $added = @(); $already = @(); $failed = @()
+    $added   = @(); $already = @(); $failed = @()
 
-    Write-Host ($fmtHeader -f 'DisplayName','Emp#','Email','Department') -ForegroundColor Gray
-    Write-Host ("=" * 130) -ForegroundColor Gray
+    # Header with status column
+    Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
+    Write-Host ("=" * 140) -ForegroundColor Gray
 
     foreach ($id in $Ids) {
         $u = Get-ADUserByIdentifier $id
         if (-not $u) {
-            Write-Host "✗ Not found: $id" -ForegroundColor Yellow; $failed += $id; continue
+            Write-Host ($fmtRow -f "✗ Not found:", $id, '', '', '') -ForegroundColor Yellow
+            $failed += $id; continue
         }
+
         $dn = if ($u.DisplayName)   { $u.DisplayName }   else { 'N/A' }
         $en = if ($u.EmployeeNumber){ $u.EmployeeNumber} else { 'N/A' }
         $em = if ($u.Mail)          { $u.Mail }           else { 'N/A' }
         $dp = if ($u.Department)    { $u.Department }     else { 'N/A' }
-        $info = ($fmtRow -f $dn,$en,$em,$dp)
 
         if ($existing.ContainsKey($u.SamAccountName)) {
-            Write-Host "⚠ Already member: $info" -ForegroundColor Yellow; $already += $id
-        } else {
+            Write-Host ($fmtRow -f "⚠ Already:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+            $already += $id
+        }
+        else {
             try {
                 Add-ADGroupMember -Identity $GroupName -Members $u.DistinguishedName -Confirm:$false -ErrorAction Stop
-                Write-Host "✓ Added:          $info" -ForegroundColor Green; $added += $id
+                Write-Host ($fmtRow -f "✓ Added:", $dn, $en, $em, $dp) -ForegroundColor Green
+                $added += $id
             } catch {
-                Write-Host "✗ Failed adding $id — $($_.Exception.Message)" -ForegroundColor Yellow; $failed += $id
+                Write-Host ($fmtRow -f "✗ Failed:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+                $failed += $id
             }
         }
     }
 
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Added:          $($added.Count)"   -ForegroundColor Green
-    Write-Host "Already Member: $($already.Count)" -ForegroundColor Yellow
-    Write-Host "Failed:         $($failed.Count)"  -ForegroundColor Yellow
+    Write-Host "Added:     $($added.Count)"   -ForegroundColor Green
+    Write-Host "Already:   $($already.Count)" -ForegroundColor Yellow
+    Write-Host "Failed:    $($failed.Count)"  -ForegroundColor Yellow
 }
 
 function Remove-Members {
@@ -169,38 +167,45 @@ function Remove-Members {
 
     $existing = @{}; Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
 
-    $removed = @(); $notMember = @(); $failed = @()
+    $removed   = @(); $notMember = @(); $failed = @()
 
-    Write-Host ($fmtHeader -f 'DisplayName','Emp#','Email','Department') -ForegroundColor Gray
-    Write-Host ("=" * 130) -ForegroundColor Gray
+    # Header with status column
+    Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
+    Write-Host ("=" * 140) -ForegroundColor Gray
 
     foreach ($id in $Ids) {
         $u = Get-ADUserByIdentifier $id
         if (-not $u) {
-            Write-Host "✗ Not found: $id" -ForegroundColor Yellow; $failed += $id; continue
+            Write-Host ($fmtRow -f "✗ Not found:", $id, '', '', '') -ForegroundColor Yellow
+            $failed += $id; continue
         }
+
         $dn = if ($u.DisplayName)   { $u.DisplayName }   else { 'N/A' }
         $en = if ($u.EmployeeNumber){ $u.EmployeeNumber} else { 'N/A' }
         $em = if ($u.Mail)          { $u.Mail }           else { 'N/A' }
         $dp = if ($u.Department)    { $u.Department }     else { 'N/A' }
-        $info = ($fmtRow -f $dn,$en,$em,$dp)
 
         if (-not $existing.ContainsKey($u.SamAccountName)) {
-            Write-Host "⚠ Not a member:  $info" -ForegroundColor Yellow; $notMember += $id
-        } else {
+            Write-Host ($fmtRow -f "⚠ Not mem:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+            $notMember += $id
+        }
+        else {
             try {
                 Remove-ADGroupMember -Identity $GroupName -Members $u.DistinguishedName -Confirm:$false -ErrorAction Stop
-                Write-Host "✓ Removed:       $info" -ForegroundColor Green; $removed += $id
-            } catch {
-                Write-Host "✗ Failed removing $id — $($_.Exception.Message)" -ForegroundColor Yellow; $failed += $id
+                Write-Host ($fmtRow -f "✓ Removed:", $dn, $en, $em, $dp) -ForegroundColor Green
+                $removed += $id
+            }
+            catch {
+                Write-Host ($fmtRow -f "✗ Failed:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+                $failed += $id
             }
         }
     }
 
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Removed:    $($removed.Count)"    -ForegroundColor Green
-    Write-Host "Not Member: $($notMember.Count)" -ForegroundColor Yellow
-    Write-Host "Failed:     $($failed.Count)"    -ForegroundColor Yellow
+    Write-Host "Removed:   $($removed.Count)"   -ForegroundColor Green
+    Write-Host "Not mem:   $($notMember.Count)" -ForegroundColor Yellow
+    Write-Host "Failed:    $($failed.Count)"    -ForegroundColor Yellow
 }
 
 # — Main Prompt Flow — #
