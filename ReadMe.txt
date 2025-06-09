@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Prompts for:
-    • AD group name
+    • AD group name (validated)
     • Action: Show Members, Add member(s), Remove member(s)
   Show Members will accept:
     • * to display all members
@@ -38,7 +38,7 @@ function Show-Members {
                  Get-ADUser -Properties Mail |
                  Select-Object Name, SamAccountName, @{Name='Email';Expression={$_.Mail}}
         $users | Format-Table -AutoSize
-        $found = $users | ForEach-Object { $_.Mail }
+        $found = $users | ForEach-Object { $_.Email }
     }
     else {
         foreach ($email in $Emails) {
@@ -52,8 +52,8 @@ function Show-Members {
                 }
             }
             else {
+                Write-Host "User not found: $email" -ForegroundColor Yellow
                 $notFound += $email
-                Write-Host "User not found: $email" -ForegroundColor DarkYellow
             }
         }
         if ($found) {
@@ -75,7 +75,7 @@ function Show-Members {
     }
     else {
         Write-Host "Found:    $($found.Count)"    -ForegroundColor Green
-        Write-Host "NotFound: $($notFound.Count)" -ForegroundColor DarkYellow
+        Write-Host "NotFound: $($notFound.Count)" -ForegroundColor Yellow
     }
 }
 
@@ -88,7 +88,7 @@ function Add-Members {
     foreach ($email in $Emails) {
         $user = Get-ADUser -Filter "Mail -eq '$email'" -Properties Mail -ErrorAction SilentlyContinue
         if (-not $user) {
-            Write-Host "✗ User not found: $email" -ForegroundColor DarkYellow
+            Write-Host "✗ User not found: $email" -ForegroundColor Yellow
             $failure += $email; continue
         }
         try {
@@ -97,15 +97,15 @@ function Add-Members {
             $success += $email
         }
         catch {
-            Write-Host "✗ Failed adding $email — $_" -ForegroundColor DarkYellow
+            Write-Host "✗ Failed adding $email — $_" -ForegroundColor Yellow
             $failure += $email
         }
     }
     # Summary
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
     Write-Host "Added:   $($success.Count)" -ForegroundColor Green
-    Write-Host "Failed:  $($failure.Count)" -ForegroundColor DarkYellow
-    if ($failure) { $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor DarkYellow } }
+    Write-Host "Failed:  $($failure.Count)" -ForegroundColor Yellow
+    if ($failure) { $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor Yellow } }
 }
 
 function Remove-Members {
@@ -117,7 +117,7 @@ function Remove-Members {
     foreach ($email in $Emails) {
         $user = Get-ADUser -Filter "Mail -eq '$email'" -Properties Mail -ErrorAction SilentlyContinue
         if (-not $user) {
-            Write-Host "✗ User not found: $email" -ForegroundColor DarkYellow
+            Write-Host "✗ User not found: $email" -ForegroundColor Yellow
             $failure += $email; continue
         }
         try {
@@ -126,20 +126,29 @@ function Remove-Members {
             $success += $email
         }
         catch {
-            Write-Host "✗ Failed removing $email — $_" -ForegroundColor DarkYellow
+            Write-Host "✗ Failed removing $email — $_" -ForegroundColor Yellow
             $failure += $email
         }
     }
     # Summary
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
     Write-Host "Removed: $($success.Count)" -ForegroundColor Green
-    Write-Host "Failed:  $($failure.Count)" -ForegroundColor DarkYellow
-    if ($failure) { $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor DarkYellow } }
+    Write-Host "Failed:  $($failure.Count)" -ForegroundColor Yellow
+    if ($failure) { $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor Yellow } }
 }
 
 
 ### —— Main Prompt Flow —— ###
-$group = Read-Host "Enter the AD group name"
+
+# Group‑name validation loop
+do {
+    $group = Read-Host "Enter the AD group name"
+    $exists = Get-ADGroup -Identity $group -ErrorAction SilentlyContinue
+    if (-not $exists) {
+        Write-Host "Group '$group' not found. Please enter a valid AD group name." -ForegroundColor Yellow
+    }
+} until ($exists)
+
 Write-Host ""
 Write-Host "Select an action:"
 Write-Host "  1) Show Members (Type * to show all members)"
@@ -156,8 +165,7 @@ switch ($choice) {
     '2' {
         $input = Read-Host "Enter email(s) to add, separated by spaces"
         $items = $input -split '\s+' | ForEach-Object { $_.Trim("'""") } | Where-Object { $_ -ne '' }
-        Show-Members # no wildcard support here
-        Add-Members -GroupName $group -Emails $items
+        Add-Members   -GroupName $group -Emails $items
     }
     '3' {
         $input = Read-Host "Enter email(s) to remove, separated by spaces"
