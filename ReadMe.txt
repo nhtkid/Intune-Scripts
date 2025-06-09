@@ -30,7 +30,7 @@ function Get-ADUserByIdentifier {
     }
 }
 
-# --- column formats: 45,15,50,20 + status prefix width 15 ---
+# --- column formats: status=15, DisplayName=45, EmployeeNumber=15, Email=50, Department=20 ---
 $fmtStatus = "{0,-15}"
 $fmtData   = "{0,-45} {1,-15} {2,-50} {3,-20}"
 $fmtRow    = $fmtStatus + " " + $fmtData
@@ -99,7 +99,7 @@ function Show-Members {
             }
         }
         else {
-            Write-Host ($fmtRow -f "✗ No match:", $term, '', '', '') -ForegroundColor Yellow
+            Write-Host ($fmtStatus -f "✗ No match: $term") -ForegroundColor Yellow
             $noMatch += $term
         }
     }
@@ -116,18 +116,18 @@ function Add-Members {
     )
     Write-Host "`nAdding members to '$GroupName':" -ForegroundColor Cyan
 
-    $existing = @{}; Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
+    $existing = @{ }
+    Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
 
     $added   = @(); $already = @(); $failed = @()
 
-    # Header with status column
     Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
     Write-Host ("=" * 140) -ForegroundColor Gray
 
     foreach ($id in $Ids) {
         $u = Get-ADUserByIdentifier $id
         if (-not $u) {
-            Write-Host ($fmtRow -f "✗ Not found:", $id, '', '', '') -ForegroundColor Yellow
+            Write-Host ($fmtStatus -f "✗ Not found: $id") -ForegroundColor Yellow
             $failed += $id; continue
         }
 
@@ -137,16 +137,16 @@ function Add-Members {
         $dp = if ($u.Department)    { $u.Department }     else { 'N/A' }
 
         if ($existing.ContainsKey($u.SamAccountName)) {
-            Write-Host ($fmtRow -f "⚠ Already:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+            Write-Host ($fmtStatus -f "⚠ Already:      ") -NoNewline; Write-Host ($fmtData -f $dn,$en,$em,$dp) -ForegroundColor Yellow
             $already += $id
         }
         else {
             try {
                 Add-ADGroupMember -Identity $GroupName -Members $u.DistinguishedName -Confirm:$false -ErrorAction Stop
-                Write-Host ($fmtRow -f "✓ Added:", $dn, $en, $em, $dp) -ForegroundColor Green
+                Write-Host ($fmtStatus -f "✓ Added:        ") -NoNewline; Write-Host ($fmtData -f $dn,$en,$em,$dp) -ForegroundColor Green
                 $added += $id
             } catch {
-                Write-Host ($fmtRow -f "✗ Failed:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+                Write-Host ($fmtStatus -f "✗ Failed:       ") -NoNewline; Write-Host ($fmtData -f $dn,$en,$em,$dp) -ForegroundColor Yellow
                 $failed += $id
             }
         }
@@ -165,18 +165,18 @@ function Remove-Members {
     )
     Write-Host "`nRemoving members from '$GroupName':" -ForegroundColor Cyan
 
-    $existing = @{}; Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
+    $existing = @{ }
+    Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
 
     $removed   = @(); $notMember = @(); $failed = @()
 
-    # Header with status column
     Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
     Write-Host ("=" * 140) -ForegroundColor Gray
 
     foreach ($id in $Ids) {
         $u = Get-ADUserByIdentifier $id
         if (-not $u) {
-            Write-Host ($fmtRow -f "✗ Not found:", $id, '', '', '') -ForegroundColor Yellow
+            Write-Host ($fmtStatus -f "✗ Not found: $id") -ForegroundColor Yellow
             $failed += $id; continue
         }
 
@@ -186,17 +186,17 @@ function Remove-Members {
         $dp = if ($u.Department)    { $u.Department }     else { 'N/A' }
 
         if (-not $existing.ContainsKey($u.SamAccountName)) {
-            Write-Host ($fmtRow -f "⚠ Not mem:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+            Write-Host ($fmtStatus -f "⚠ Not mem:      ") -NoNewline; Write-Host ($fmtData -f $dn,$en,$em,$dp) -ForegroundColor Yellow
             $notMember += $id
         }
         else {
             try {
                 Remove-ADGroupMember -Identity $GroupName -Members $u.DistinguishedName -Confirm:$false -ErrorAction Stop
-                Write-Host ($fmtRow -f "✓ Removed:", $dn, $en, $em, $dp) -ForegroundColor Green
+                Write-Host ($fmtStatus -f "✓ Removed:      ") -NoNewline; Write-Host ($fmtData -f $dn,$en,$em,$dp) -ForegroundColor Green
                 $removed += $id
             }
             catch {
-                Write-Host ($fmtRow -f "✗ Failed:", $dn, $en, $em, $dp) -ForegroundColor Yellow
+                Write-Host ($fmtStatus -f "✗ Failed:       ") -NoNewline; Write-Host ($fmtData -f $dn,$en,$em,$dp) -ForegroundColor Yellow
                 $failed += $id
             }
         }
