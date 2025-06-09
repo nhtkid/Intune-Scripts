@@ -8,7 +8,7 @@
       1) Show Members  
       2) Add Members  
       3) Remove Members  
-  • Show Members supports * or partial-match terms  
+  • Show Members supports * or partial-match terms, with optional paging  
   • Add/Remove continues on errors  
   • Outputs aligned columns for Status, DisplayName, EmployeeNumber, Email, Department  
   • Color-coded feedback + summary
@@ -40,9 +40,16 @@ function Show-Members {
         [string]   $GroupName,
         [string[]] $Terms
     )
-    $showAll = $Terms -contains '*'
-    $groupDN = (Get-ADGroup -Identity $GroupName -ErrorAction Stop).DistinguishedName
 
+    # — bind to the group once via ADSI and grab its 'member' attribute —
+    $groupDN = (Get-ADGroup -Identity $GroupName -ErrorAction Stop).DistinguishedName
+    $adsi    = [ADSI]"LDAP://$groupDN"
+    $allDNs  = $adsi.psbase.Properties["member"]
+    $allUsers = $allDNs | ForEach-Object {
+        Get-ADUser -Identity $_ -Properties DisplayName,EmployeeNumber,Mail,Department
+    }
+
+    $showAll = $Terms -contains '*'
     if ($showAll) {
         $pageSize = Read-Host "Enter page size for visual grouping (or press Enter for continuous)"
         if ($pageSize -and ($pageSize -as [int]) -gt 0) { $pageSize = [int]$pageSize } else { $pageSize = 0 }
@@ -52,8 +59,7 @@ function Show-Members {
         Write-Host ("=" * 140) -ForegroundColor Gray
 
         $count = 0
-        Get-ADGroupMember -Identity $GroupName | ForEach-Object {
-            $u = Get-ADUser -Identity $_.DistinguishedName -Properties DisplayName,EmployeeNumber,Mail,Department
+        foreach ($u in $allUsers) {
             $dn = if ($u.DisplayName)   { $u.DisplayName }   else { 'N/A' }
             $en = if ($u.EmployeeNumber){ $u.EmployeeNumber} else { 'N/A' }
             $em = if ($u.Mail)          { $u.Mail }           else { 'N/A' }
@@ -69,11 +75,8 @@ function Show-Members {
         return
     }
 
+    # — otherwise do term‐by‐term filtering —
     Write-Host "Searching group '$GroupName' for terms: $($Terms -join ', ')" -ForegroundColor Cyan
-    $allMembers = Get-ADGroupMember -Identity $GroupName -Recursive |
-                  Get-ADUser -Properties DisplayName,EmployeeNumber,Mail,Department |
-                  Select-Object DisplayName,EmployeeNumber,Mail,Department
-
     Write-Host ($fmtData -f 'DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
     Write-Host ("=" * 140) -ForegroundColor Gray
 
@@ -82,7 +85,7 @@ function Show-Members {
 
     foreach ($term in $Terms) {
         $pattern = "*$term*"
-        $matches = $allMembers | Where-Object {
+        $matches = $allUsers | Where-Object {
             $_.DisplayName    -like $pattern -or
             $_.EmployeeNumber -like $pattern -or
             $_.Mail           -like $pattern
@@ -116,8 +119,15 @@ function Add-Members {
     )
     Write-Host "Adding members to '$GroupName':" -ForegroundColor Cyan
 
-    $existing = @{ }
-    Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
+    # grab existing via ADSI too (avoids any paging)
+    $groupDN = (Get-ADGroup -Identity $GroupName).DistinguishedName
+    $adsi    = [ADSI]"LDAP://$groupDN"
+    $existingDNs = $adsi.psbase.Properties["member"]
+    $existing     = @{}
+    foreach ($dn in $existingDNs) {
+        $sam = (Get-ADUser -Identity $dn -Properties SamAccountName).SamAccountName
+        $existing[$sam] = $true
+    }
 
     $added   = @(); $already = @(); $failed = @()
 
@@ -165,8 +175,15 @@ function Remove-Members {
     )
     Write-Host "Removing members from '$GroupName':" -ForegroundColor Cyan
 
-    $existing = @{ }
-    Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
+    # grab existing via ADSI
+    $groupDN = (Get-ADGroup -Identity $GroupName).DistinguishedName
+    $adsi    = [ADSI]"LDAP://$groupDN"
+    $existingDNs = $adsi.psbase.Properties["member"]
+    $existing     = @{}
+    foreach ($dn in $existingDNs) {
+        $sam = (Get-ADUser -Identity $dn -Properties SamAccountName).SamAccountName
+        $existing[$sam] = $true
+    }
 
     $removed   = @(); $notMember = @(); $failed = @()
 
