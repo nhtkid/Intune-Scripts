@@ -4,103 +4,169 @@
 
 .DESCRIPTION
   Prompts for:
-    1) AD group name
-    2) Action: show | add | remove
-    3) (if add/remove) one or more emails
-  Then confirms and performs the operation,
-  printing per‑user status in color and a summary.
+    • AD group name
+    • Action: Show Members, Add member(s), Remove member(s)
+  Show Members will accept:
+    • * to display all members
+    • one or more email addresses
+  Add/Remove only accept email lists.
+  Prints colored per‑user results and a summary.
 
 .NOTES
   Requires the ActiveDirectory module and run as Administrator.
 #>
 
-# Ensure the AD module is loaded
+# Ensure the AD module is available
 if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
     Write-Error "The ActiveDirectory module is not available. Install RSAT-AD-PowerShell and rerun."
     exit 1
 }
 Import-Module ActiveDirectory
 
-# 1. Get the group name
-$group = Read-Host "Enter the AD group name"
+function Show-Members {
+    param(
+        [string]$GroupName,
+        [string[]]$Emails  # '*' or specific emails
+    )
+    $all = $Emails -contains '*'
+    $found = @()
+    $notFound = @()
 
-# 2. Choose action
+    if ($all) {
+        # Fetch every member
+        $users = Get-ADGroupMember -Identity $GroupName -Recursive |
+                 Get-ADUser -Properties Mail |
+                 Select-Object Name, SamAccountName, @{Name='Email';Expression={$_.Mail}}
+        $users | Format-Table -AutoSize
+        $found = $users | ForEach-Object { $_.Mail }
+    }
+    else {
+        foreach ($email in $Emails) {
+            $user = Get-ADUser -Filter "Mail -eq '$email'" -Properties Mail -ErrorAction SilentlyContinue
+            if ($user) {
+                $found += $user.Mail
+                [PSCustomObject]@{
+                    Name           = $user.Name
+                    SamAccountName = $user.SamAccountName
+                    Email          = $user.Mail
+                }
+            }
+            else {
+                $notFound += $email
+                Write-Host "User not found: $email" -ForegroundColor DarkYellow
+            }
+        }
+        if ($found) {
+            $found | ForEach-Object {
+                $u = Get-ADUser -Filter "Mail -eq '$_'" -Properties Mail
+                [PSCustomObject]@{
+                    Name           = $u.Name
+                    SamAccountName = $u.SamAccountName
+                    Email          = $u.Mail
+                }
+            } | Format-Table -AutoSize
+        }
+    }
+
+    # Summary
+    Write-Host "`n=== Summary ===" -ForegroundColor Cyan
+    if ($all) {
+        Write-Host "Total members displayed: $($found.Count)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "Found:    $($found.Count)"    -ForegroundColor Green
+        Write-Host "NotFound: $($notFound.Count)" -ForegroundColor DarkYellow
+    }
+}
+
+function Add-Members {
+    param(
+        [string]$GroupName,
+        [string[]]$Emails
+    )
+    $success = @(); $failure = @()
+    foreach ($email in $Emails) {
+        $user = Get-ADUser -Filter "Mail -eq '$email'" -Properties Mail -ErrorAction SilentlyContinue
+        if (-not $user) {
+            Write-Host "✗ User not found: $email" -ForegroundColor DarkYellow
+            $failure += $email; continue
+        }
+        try {
+            Add-ADGroupMember -Identity $GroupName -Members $user.DistinguishedName -Confirm:$false -ErrorAction Stop
+            Write-Host "✓ Added: $($user.SamAccountName) <$email>" -ForegroundColor Green
+            $success += $email
+        }
+        catch {
+            Write-Host "✗ Failed adding $email — $_" -ForegroundColor DarkYellow
+            $failure += $email
+        }
+    }
+    # Summary
+    Write-Host "`n=== Summary ===" -ForegroundColor Cyan
+    Write-Host "Added:   $($success.Count)" -ForegroundColor Green
+    Write-Host "Failed:  $($failure.Count)" -ForegroundColor DarkYellow
+    if ($failure) { $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor DarkYellow } }
+}
+
+function Remove-Members {
+    param(
+        [string]$GroupName,
+        [string[]]$Emails
+    )
+    $success = @(); $failure = @()
+    foreach ($email in $Emails) {
+        $user = Get-ADUser -Filter "Mail -eq '$email'" -Properties Mail -ErrorAction SilentlyContinue
+        if (-not $user) {
+            Write-Host "✗ User not found: $email" -ForegroundColor DarkYellow
+            $failure += $email; continue
+        }
+        try {
+            Remove-ADGroupMember -Identity $GroupName -Members $user.DistinguishedName -Confirm:$false -ErrorAction Stop
+            Write-Host "✓ Removed: $($user.SamAccountName) <$email>" -ForegroundColor Green
+            $success += $email
+        }
+        catch {
+            Write-Host "✗ Failed removing $email — $_" -ForegroundColor DarkYellow
+            $failure += $email
+        }
+    }
+    # Summary
+    Write-Host "`n=== Summary ===" -ForegroundColor Cyan
+    Write-Host "Removed: $($success.Count)" -ForegroundColor Green
+    Write-Host "Failed:  $($failure.Count)" -ForegroundColor DarkYellow
+    if ($failure) { $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor DarkYellow } }
+}
+
+
+### —— Main Prompt Flow —— ###
+$group = Read-Host "Enter the AD group name"
 Write-Host ""
-Write-Host "Select an action:" 
-Write-Host "  1) Show members"
+Write-Host "Select an action:"
+Write-Host "  1) Show Members (Type * to show all members)"
 Write-Host "  2) Add member(s)"
 Write-Host "  3) Remove member(s)"
-$action = Read-Host "Enter 1, 2, or 3"
+$choice = Read-Host "Enter 1, 2, or 3"
 
-# Show members and exit
-if ($action -eq '1') {
-    Write-Host "`nMembers of '$group':" -ForegroundColor Cyan
-    Get-ADGroupMember -Identity $group -Recursive |
-      Get-ADUser -Properties Mail |
-      Select-Object Name, SamAccountName, @{Name='Email';Expression={$_.Mail}} |
-      Format-Table -AutoSize
-    exit 0
-}
-
-# 3. For add/remove, get email list
-$verb = if ($action -eq '2') { 'add to' } elseif ($action -eq '3') { 'remove from' } else { Write-Error "Invalid choice"; exit 1 }
-$emailsInput = Read-Host "`nEnter one or more email addresses (separate with spaces; quotes are OK)"
-
-# Normalize input into an array of clean emails
-$emails = $emailsInput -split '\s+' |
-          ForEach-Object { $_.Trim("'""") } |
-          Where-Object { $_ -ne '' }
-
-if (-not $emails) {
-    Write-Error "No valid email addresses provided. Exiting."
-    exit 1
-}
-
-# 4. Confirmation prompt
-Write-Host "`nWARNING: You are about to $verb group '$group' for these emails:`n" -ForegroundColor Yellow
-$emails | ForEach-Object { Write-Host "  • $_" }
-$confirm = Read-Host "`nType Y to confirm, or any other key to cancel"
-if ($confirm -notmatch '^[Yy]$') {
-    Write-Host "Operation cancelled by user." -ForegroundColor DarkCyan
-    exit 0
-}
-
-# 5. Perform add/remove with per‑user feedback
-$success = @()
-$failure = @()
-
-foreach ($email in $emails) {
-    # Look up the user by Mail
-    $user = Get-ADUser -Filter "Mail -eq '$email'" -Properties Mail -ErrorAction SilentlyContinue
-    if (-not $user) {
-        Write-Host "✗ User not found: $email" -ForegroundColor DarkYellow
-        $failure += $email
-        continue
+switch ($choice) {
+    '1' {
+        $input = Read-Host "Enter email(s) separated by spaces, or *"
+        $items = $input -split '\s+' | ForEach-Object { $_.Trim("'""") } | Where-Object { $_ -ne '' }
+        Show-Members -GroupName $group -Emails $items
     }
-
-    try {
-        if ($action -eq '2') {
-            Add-ADGroupMember -Identity $group -Members $user.DistinguishedName -Confirm:$false -ErrorAction Stop
-            Write-Host "✓ Added: $($user.SamAccountName) <$email>" -ForegroundColor Green
-        } else {
-            Remove-ADGroupMember -Identity $group -Members $user.DistinguishedName -Confirm:$false -ErrorAction Stop
-            Write-Host "✓ Removed: $($user.SamAccountName) <$email>" -ForegroundColor Green
-        }
-        $success += $email
+    '2' {
+        $input = Read-Host "Enter email(s) to add, separated by spaces"
+        $items = $input -split '\s+' | ForEach-Object { $_.Trim("'""") } | Where-Object { $_ -ne '' }
+        Show-Members # no wildcard support here
+        Add-Members -GroupName $group -Emails $items
     }
-    catch {
-        Write-Host "✗ Failed: $($user.SamAccountName) <$email> — $_" -ForegroundColor DarkYellow
-        $failure += $email
+    '3' {
+        $input = Read-Host "Enter email(s) to remove, separated by spaces"
+        $items = $input -split '\s+' | ForEach-Object { $_.Trim("'""") } | Where-Object { $_ -ne '' }
+        Remove-Members -GroupName $group -Emails $items
     }
-}
-
-# Summary
-Write-Host "`n===== Summary =====" -ForegroundColor Cyan
-Write-Host "Successful: $($success.Count)" -ForegroundColor Green
-Write-Host "Failed:     $($failure.Count)" -ForegroundColor DarkYellow
-if ($failure.Count -gt 0) {
-    Write-Host "`nFailures:" -ForegroundColor DarkYellow
-    $failure | ForEach-Object { Write-Host "  • $_" -ForegroundColor DarkYellow }
+    default {
+        Write-Error "Invalid selection. Exiting."
+    }
 }
 
 exit 0
