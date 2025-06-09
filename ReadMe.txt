@@ -65,7 +65,7 @@ function Show-Members {
             }
         }
 
-        Write-Host "nTotal members: $count" -ForegroundColor Green
+        Write-Host "Total members: $count" -ForegroundColor Green
         return
     }
 
@@ -242,4 +242,4 @@ switch ($choice) {
     }
 }
 
-Write-Host "nOperation completed." -ForegroundColor Green
+Write-Host "Operation completed." -ForegroundColor Green
