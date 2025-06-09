@@ -1,37 +1,41 @@
-<#
-.SYNOPSIS
-  Interactive AD-group management by email or SamAccountName.
-
-.DESCRIPTION
-  • Prompts for a valid AD group name  
-  • Then loops until you pick a valid action (1–3):  
-      1) Show Members  
-      2) Add Members  
-      3) Remove Members  
-  • Show Members: accepts `*` or a list of identifiers, streams as it goes  
-      – You can enter a page size to visually separate output blocks  
-  • Add/Remove: accepts a list of identifiers (no `*`), continues on errors  
-  • Outputs DisplayName, EmployeeNumber, Email, Department  
-  • Color-coded feedback + summary
-
-.NOTES
-  - Assumes the ActiveDirectory module is already loaded  
-  - Run as Administrator  
-#>
+#
+# Interactive AD-group management by email address or SamAccountName.
+# Enhanced with DisplayName, EmployeeNumber, Email, Department output.
+#
 
 Import-Module ActiveDirectory
 
+# Helper: resolve user by email or SamAccountName with all needed properties
 function Get-ADUserByIdentifier {
     param([string]$Identifier)
-    $props = 'DisplayName','EmployeeNumber','Mail','Department','MemberOf'
-    if ($Identifier -match '@') {
-        return Get-ADUser -Filter "Mail -eq '$Identifier'" -Properties $props -ErrorAction SilentlyContinue
+    
+    $props = 'DisplayName','EmployeeNumber','Mail','Department'
+    
+    try {
+        if ($Identifier -match '@') {
+            # Use scriptblock syntax to prevent LDAP injection
+            return Get-ADUser -Filter {Mail -eq $Identifier} -Properties $props -ErrorAction Stop
+        }
+        else {
+            return Get-ADUser -Identity $Identifier -Properties $props -ErrorAction Stop
+        }
     }
-    else {
-        return Get-ADUser -Identity $Identifier -Properties $props -ErrorAction SilentlyContinue
+    catch {
+        return $null
     }
 }
 
+# Helper: check if user is member of group (direct membership only)
+function Test-UserInGroup {
+    param(
+        [string]$UserSamAccountName,
+        [hashtable]$ExistingMembers
+    )
+    
+    return $ExistingMembers.ContainsKey($UserSamAccountName)
+}
+
+# Show-Members: streams all members or checks specific users
 function Show-Members {
     param(
         [string]   $GroupName,
@@ -39,207 +43,249 @@ function Show-Members {
     )
 
     $showAll = $Identifiers -contains '*'
-    # get group DN once
-    $groupDN = (Get-ADGroup -Identity $GroupName -ErrorAction Stop).DistinguishedName
+    $found = @(); $notFound = @(); $notInGroup = @()
 
     if ($showAll) {
-        $pageSize = Read-Host "Enter page size for visual grouping (or press Enter for continuous)"
-        if ($pageSize -and ($pageSize -as [int]) -gt 0) {
-            $pageSize = [int]$pageSize
-        } else { $pageSize = 0 }
-
         Write-Host "`nStreaming all members of '$GroupName':" -ForegroundColor Cyan
         Write-Host "DisplayName | EmployeeNumber | Email | Department" -ForegroundColor Gray
         Write-Host ("=" * 80) -ForegroundColor Gray
-
+        
         $count = 0
-        Get-ADGroupMember -Identity $GroupName | ForEach-Object {
-            $u = Get-ADUser -Identity $_.DistinguishedName -Properties DisplayName,EmployeeNumber,Mail,Department
-            $dn = $u.DisplayName  ?? 'N/A'
-            $en = $u.EmployeeNumber ?? 'N/A'
-            $em = $u.Mail           ?? 'N/A'
-            $dp = $u.Department     ?? 'N/A'
-            Write-Host "$dn | $en | $em | $dp"
-            $count++
-            if ($pageSize -gt 0 -and ($count % $pageSize) -eq 0) {
-                Write-Host ("-" * 80) -ForegroundColor Gray
+        try {
+            Get-ADGroupMember -Identity $GroupName | ForEach-Object {
+                $u = Get-ADUser -Identity $_.DistinguishedName -Properties DisplayName,EmployeeNumber,Mail,Department -ErrorAction SilentlyContinue
+                if ($u) {
+                    $displayName = $u.DisplayName ?? "N/A"
+                    $empNumber = $u.EmployeeNumber ?? "N/A"  
+                    $email = $u.Mail ?? "N/A"
+                    $dept = $u.Department ?? "N/A"
+                    Write-Host "$displayName | $empNumber | $email | $dept"
+                    $count++
+                }
             }
         }
-
+        catch {
+            Write-Host "Error retrieving group members: $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+        
         Write-Host "`nTotal members: $count" -ForegroundColor Green
         return
     }
 
-    # specific identifiers
     Write-Host "`nChecking specified identifiers..." -ForegroundColor Cyan
-    # cache direct members
-    $existing = @{}
-    Get-ADGroupMember -Identity $GroupName | ForEach-Object {
-        $existing[$_.SamAccountName] = $true
+    
+    # Get existing members for efficient lookup
+    $existingMembers = @{}
+    try {
+        Get-ADGroupMember -Identity $GroupName | ForEach-Object {
+            $existingMembers[$_.SamAccountName] = $true
+        }
     }
-
-    $found = @(); $notIn = @(); $notFound = @()
+    catch {
+        Write-Host "Error retrieving group members: $($_.Exception.Message)" -ForegroundColor Red
+        return
+    }
+    
     foreach ($id in $Identifiers) {
-        $u = Get-ADUserByIdentifier $id
-        if (-not $u) {
-            Write-Host "✗ Not found: $id" -ForegroundColor Yellow
-            $notFound += $id; continue
+        $user = Get-ADUserByIdentifier $id
+        
+        if (-not $user) {
+            Write-Host "✗ Not found: $id" -ForegroundColor Red
+            $notFound += $id
+            continue
         }
 
-        $dn = $u.DisplayName  ?? 'N/A'
-        $en = $u.EmployeeNumber ?? 'N/A'
-        $em = $u.Mail           ?? 'N/A'
-        $dp = $u.Department     ?? 'N/A'
-        $info = "$dn | $en | $em | $dp"
-
-        if ($existing.ContainsKey($u.SamAccountName)) {
-            Write-Host "✓ In group:     $info" -ForegroundColor Green
+        # Check direct membership only
+        if (Test-UserInGroup -UserSamAccountName $user.SamAccountName -ExistingMembers $existingMembers) {
+            $displayName = $user.DisplayName ?? "N/A"
+            $empNumber = $user.EmployeeNumber ?? "N/A"
+            $email = $user.Mail ?? "N/A" 
+            $dept = $user.Department ?? "N/A"
+            Write-Host "✓ In group: $displayName | $empNumber | $email | $dept" -ForegroundColor Green
             $found += $id
-        } else {
-            Write-Host "⚠ Not in group: $info" -ForegroundColor Yellow
-            $notIn += $id
+        }
+        else {
+            $displayName = $user.DisplayName ?? "N/A"
+            $empNumber = $user.EmployeeNumber ?? "N/A"
+            $email = $user.Mail ?? "N/A"
+            $dept = $user.Department ?? "N/A"
+            Write-Host "⚠ Not in group: $displayName | $empNumber | $email | $dept" -ForegroundColor Yellow
+            $notInGroup += $id
         }
     }
 
+    # Summary
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
     Write-Host "In Group:     $($found.Count)" -ForegroundColor Green
-    Write-Host "Not in Group: $($notIn.Count)" -ForegroundColor Yellow
-    Write-Host "Not Found:    $($notFound.Count)" -ForegroundColor Yellow
+    Write-Host "Not in Group: $($notInGroup.Count)" -ForegroundColor Yellow
+    Write-Host "Not Found:    $($notFound.Count)" -ForegroundColor Red
 }
 
+# Add-Members: adds users with detailed reporting
 function Add-Members {
     param(
         [string]   $GroupName,
         [string[]] $Identifiers
     )
-    Write-Host "`nAdding members to '$GroupName':" -ForegroundColor Cyan
 
-    $existing = @{}
-    Get-ADGroupMember -Identity $GroupName | ForEach-Object {
-        $existing[$_.SamAccountName] = $true
+    Write-Host "`nAdding members to '$GroupName':" -ForegroundColor Cyan
+    
+    # Cache existing members for efficiency
+    $existingMembers = @{}
+    try {
+        Get-ADGroupMember -Identity $GroupName | ForEach-Object {
+            $existingMembers[$_.SamAccountName] = $true
+        }
+    }
+    catch {
+        Write-Host "Error retrieving existing members: $($_.Exception.Message)" -ForegroundColor Red
+        return
     }
 
     $added = @(); $already = @(); $failed = @()
+
     foreach ($id in $Identifiers) {
         $u = Get-ADUserByIdentifier $id
+        
         if (-not $u) {
-            Write-Host "✗ Not found: $id" -ForegroundColor Yellow
-            $failed += $id; continue
+            Write-Host "✗ Not found: $id" -ForegroundColor Red
+            $failed += $id
+            continue
         }
 
-        $dn = $u.DisplayName  ?? 'N/A'
-        $en = $u.EmployeeNumber ?? 'N/A'
-        $em = $u.Mail           ?? 'N/A'
-        $dp = $u.Department     ?? 'N/A'
-        $info = "$dn | $en | $em | $dp"
+        $displayName = $u.DisplayName ?? "N/A"
+        $empNumber = $u.EmployeeNumber ?? "N/A"
+        $email = $u.Mail ?? "N/A"
+        $dept = $u.Department ?? "N/A"
+        $userInfo = "$displayName | $empNumber | $email | $dept"
 
-        if ($existing.ContainsKey($u.SamAccountName)) {
-            Write-Host "⚠ Already member: $info" -ForegroundColor Yellow
+        if ($existingMembers.ContainsKey($u.SamAccountName)) {
+            Write-Host "⚠ Already member: $userInfo" -ForegroundColor Yellow
             $already += $id
-        } else {
+        }
+        else {
             try {
                 Add-ADGroupMember -Identity $GroupName -Members $u.DistinguishedName -Confirm:$false -ErrorAction Stop
-                Write-Host "✓ Added: $info" -ForegroundColor Green
+                Write-Host "✓ Added: $userInfo" -ForegroundColor Green
                 $added += $id
-            } catch {
-                Write-Host "✗ Failed adding $id — $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+            catch {
+                Write-Host "✗ Failed adding $id — $($_.Exception.Message)" -ForegroundColor Red
                 $failed += $id
             }
         }
     }
 
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Added:          $($added.Count)"         -ForegroundColor Green
-    Write-Host "Already Member: $($already.Count)"       -ForegroundColor Yellow
-    Write-Host "Failed:         $($failed.Count)"        -ForegroundColor Yellow
+    Write-Host "Added:          $($added.Count)" -ForegroundColor Green
+    Write-Host "Already Member: $($already.Count)" -ForegroundColor Yellow
+    Write-Host "Failed:         $($failed.Count)" -ForegroundColor Red
 }
 
+# Remove-Members: removes users with detailed reporting  
 function Remove-Members {
     param(
         [string]   $GroupName,
         [string[]] $Identifiers
     )
-    Write-Host "`nRemoving members from '$GroupName':" -ForegroundColor Cyan
 
-    $existing = @{}
-    Get-ADGroupMember -Identity $GroupName | ForEach-Object {
-        $existing[$_.SamAccountName] = $true
+    Write-Host "`nRemoving members from '$GroupName':" -ForegroundColor Cyan
+    
+    # Cache existing members
+    $existingMembers = @{}
+    try {
+        Get-ADGroupMember -Identity $GroupName | ForEach-Object {
+            $existingMembers[$_.SamAccountName] = $true
+        }
+    }
+    catch {
+        Write-Host "Error retrieving existing members: $($_.Exception.Message)" -ForegroundColor Red
+        return
     }
 
     $removed = @(); $notMember = @(); $failed = @()
+
     foreach ($id in $Identifiers) {
         $u = Get-ADUserByIdentifier $id
+        
         if (-not $u) {
-            Write-Host "✗ Not found: $id" -ForegroundColor Yellow
-            $failed += $id; continue
+            Write-Host "✗ Not found: $id" -ForegroundColor Red
+            $failed += $id
+            continue
         }
 
-        $dn = $u.DisplayName  ?? 'N/A'
-        $en = $u.EmployeeNumber ?? 'N/A'
-        $em = $u.Mail           ?? 'N/A'
-        $dp = $u.Department     ?? 'N/A'
-        $info = "$dn | $en | $em | $dp"
+        $displayName = $u.DisplayName ?? "N/A"
+        $empNumber = $u.EmployeeNumber ?? "N/A"
+        $email = $u.Mail ?? "N/A"
+        $dept = $u.Department ?? "N/A"
+        $userInfo = "$displayName | $empNumber | $email | $dept"
 
-        if (-not $existing.ContainsKey($u.SamAccountName)) {
-            Write-Host "⚠ Not a member: $info" -ForegroundColor Yellow
+        if (-not $existingMembers.ContainsKey($u.SamAccountName)) {
+            Write-Host "⚠ Not a member: $userInfo" -ForegroundColor Yellow
             $notMember += $id
-        } else {
+        }
+        else {
             try {
                 Remove-ADGroupMember -Identity $GroupName -Members $u.DistinguishedName -Confirm:$false -ErrorAction Stop
-                Write-Host "✓ Removed: $info" -ForegroundColor Green
+                Write-Host "✓ Removed: $userInfo" -ForegroundColor Green
                 $removed += $id
-            } catch {
-                Write-Host "✗ Failed removing $id — $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+            catch {
+                Write-Host "✗ Failed removing $id — $($_.Exception.Message)" -ForegroundColor Red
                 $failed += $id
             }
         }
     }
 
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Removed:    $($removed.Count)"    -ForegroundColor Green
+    Write-Host "Removed:    $($removed.Count)" -ForegroundColor Green
     Write-Host "Not Member: $($notMember.Count)" -ForegroundColor Yellow
-    Write-Host "Failed:     $($failed.Count)"    -ForegroundColor Yellow
+    Write-Host "Failed:     $($failed.Count)" -ForegroundColor Red
 }
 
-# — Main Prompt Flow — #
-
-# 1) Group name
+# Main execution
 do {
     $group = Read-Host "`nEnter the AD group name"
     try {
         Get-ADGroup -Identity $group -ErrorAction Stop | Out-Null
         $valid = $true
-    } catch {
-        Write-Host "Group '$group' not found. Please try again." -ForegroundColor Yellow
+    } 
+    catch {
+        Write-Host "Group '$group' not found. Please try again." -ForegroundColor Red
         $valid = $false
     }
 } until ($valid)
 
-# 2) Action menu (re-prompt on invalid)
-do {
-    Write-Host "`nSelect an action:" -ForegroundColor Cyan
-    Write-Host "  1) Show Members"
-    Write-Host "  2) Add Members"
-    Write-Host "  3) Remove Members"
-    $choice = Read-Host "Enter choice (1-3)"
-} until ($choice -in '1','2','3')
+Write-Host "`nSelect an action:" -ForegroundColor Cyan
+Write-Host "  1) Show Members (enter * for all, or specific emails/usernames)"
+Write-Host "  2) Add Members" 
+Write-Host "  3) Remove Members"
 
-# 3) Dispatch
+$choice = Read-Host "`nEnter choice (1-3)"
+
 switch ($choice) {
     '1' {
-        $input = Read-Host "Enter identifiers separated by spaces, or * for all"
-        $ids   = $input -split '\s+' | Where-Object { $_.Trim() -ne '' }
-        Show-Members   -GroupName $group -Identifiers $ids
+        $input = Read-Host "Enter identifiers (emails/usernames) separated by spaces, or *"
+        $ids = $input -split '\s+' | Where-Object { $_.Trim() -ne '' }
+        if ($ids) { Show-Members -GroupName $group -Identifiers $ids }
+        else { Write-Host "No identifiers provided." -ForegroundColor Yellow }
     }
     '2' {
         $input = Read-Host "Enter identifiers to add, separated by spaces"
-        $ids   = $input -split '\s+' | Where-Object { $_.Trim() -ne '' }
-        Add-Members    -GroupName $group -Identifiers $ids
+        $ids = $input -split '\s+' | Where-Object { $_.Trim() -ne '' }
+        if ($ids) { Add-Members -GroupName $group -Identifiers $ids }
+        else { Write-Host "No identifiers provided." -ForegroundColor Yellow }
     }
     '3' {
         $input = Read-Host "Enter identifiers to remove, separated by spaces"
-        $ids   = $input -split '\s+' | Where-Object { $_.Trim() -ne '' }
-        Remove-Members -GroupName $group -Identifiers $ids
+        $ids = $input -split '\s+' | Where-Object { $_.Trim() -ne '' }
+        if ($ids) { Remove-Members -GroupName $group -Identifiers $ids }
+        else { Write-Host "No identifiers provided." -ForegroundColor Yellow }
+    }
+    default {
+        Write-Host "Invalid selection. Exiting." -ForegroundColor Red
+        exit 1
     }
 }
 
