@@ -47,7 +47,7 @@ function Show-Members {
         $pageSize = Read-Host "Enter page size for visual grouping (or press Enter for continuous)"
         if ($pageSize -and ($pageSize -as [int]) -gt 0) { $pageSize = [int]$pageSize } else { $pageSize = 0 }
 
-        Write-Host "nStreaming all members of '$GroupName':" -ForegroundColor Cyan
+        Write-Host "Streaming all members of '$GroupName':" -ForegroundColor Cyan
         Write-Host ($fmtData -f 'DisplayName','EmployeeNumber','Email','Department') -ForegroundColor Gray
         Write-Host ("=" * 140) -ForegroundColor Gray
 
@@ -69,7 +69,7 @@ function Show-Members {
         return
     }
 
-    Write-Host "nSearching group '$GroupName' for terms: $($Terms -join ', ')" -ForegroundColor Cyan
+    Write-Host "Searching group '$GroupName' for terms: $($Terms -join ', ')" -ForegroundColor Cyan
     $allMembers = Get-ADGroupMember -Identity $GroupName -Recursive |
                   Get-ADUser -Properties DisplayName,EmployeeNumber,Mail,Department |
                   Select-Object DisplayName,EmployeeNumber,Mail,Department
@@ -104,7 +104,7 @@ function Show-Members {
         }
     }
 
-    Write-Host "n=== Summary ===" -ForegroundColor Cyan
+    Write-Host "=== Summary ===" -ForegroundColor Cyan
     Write-Host "Total matched: $totalFound" -ForegroundColor Green
     if ($noMatch) { Write-Host "No matches for: $($noMatch -join ', ')" -ForegroundColor Yellow }
 }
@@ -114,7 +114,7 @@ function Add-Members {
         [string]   $GroupName,
         [string[]] $Ids
     )
-    Write-Host "nAdding members to '$GroupName':" -ForegroundColor Cyan
+    Write-Host "Adding members to '$GroupName':" -ForegroundColor Cyan
 
     $existing = @{ }
     Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
@@ -152,7 +152,7 @@ function Add-Members {
         }
     }
 
-    Write-Host "n=== Summary ===" -ForegroundColor Cyan
+    Write-Host "=== Summary ===" -ForegroundColor Cyan
     Write-Host "Added:     $($added.Count)"   -ForegroundColor Green
     Write-Host "Already:   $($already.Count)" -ForegroundColor Yellow
     Write-Host "Failed:    $($failed.Count)"  -ForegroundColor Yellow
@@ -163,7 +163,7 @@ function Remove-Members {
         [string]   $GroupName,
         [string[]] $Ids
     )
-    Write-Host "nRemoving members from '$GroupName':" -ForegroundColor Cyan
+    Write-Host "Removing members from '$GroupName':" -ForegroundColor Cyan
 
     $existing = @{ }
     Get-ADGroupMember -Identity $GroupName | ForEach-Object { $existing[$_.SamAccountName] = $true }
@@ -202,7 +202,7 @@ function Remove-Members {
         }
     }
 
-    Write-Host "n=== Summary ===" -ForegroundColor Cyan
+    Write-Host "=== Summary ===" -ForegroundColor Cyan
     Write-Host "Removed:   $($removed.Count)"   -ForegroundColor Green
     Write-Host "Not mem:   $($notMember.Count)" -ForegroundColor Yellow
     Write-Host "Failed:    $($failed.Count)"    -ForegroundColor Yellow
@@ -217,7 +217,7 @@ do {
 } until ($valid)
 
 do {
-    Write-Host "nSelect an action:" -ForegroundColor Cyan
+    Write-Host "Select an action:" -ForegroundColor Cyan
     Write-Host "  1) Show Members"
     Write-Host "  2) Add Members"
     Write-Host "  3) Remove Members"
