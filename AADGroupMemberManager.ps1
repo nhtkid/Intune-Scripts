@@ -75,12 +75,9 @@ function Get-AADUserByIdentifier {
     if ($Identifier -match '@') {
         $u = Get-AzureADUser -Filter "userPrincipalName eq '$Identifier'" -ErrorAction SilentlyContinue
         if ($u) { return $u }
-        $u = Get-AzureADUser -Filter "mail eq '$Identifier'" -ErrorAction SilentlyContinue
-        return $u
+        return Get-AzureADUser -Filter "mail eq '$Identifier'" -ErrorAction SilentlyContinue
     } else {
-        # Try UPN without domain
-        $u = Get-AzureADUser -Filter "userPrincipalName eq '$Identifier'" -ErrorAction SilentlyContinue
-        return $u
+        return Get-AzureADUser -Filter "userPrincipalName eq '$Identifier'" -ErrorAction SilentlyContinue
     }
 }
 
@@ -113,10 +110,10 @@ function Show-Members {
         Write-Host ("=" * 140) -ForegroundColor Gray
         $count = 0
         foreach ($u in $allUsers) {
-            $dn  = $u.DisplayName    ? $u.DisplayName    : 'N/A'
-            $eid = $u.EmployeeId     ? $u.EmployeeId     : 'N/A'
-            $em  = $u.Mail           ? $u.Mail           : 'N/A'
-            $dp  = $u.Department     ? $u.Department     : 'N/A'
+            if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
+            if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
+            if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
+            if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
             Write-Host ($fmtData -f $dn,$eid,$em,$dp)
             $count++
             if ($pageSize -gt 0 -and ($count % $pageSize) -eq 0) {
@@ -140,10 +137,10 @@ function Show-Members {
         }
         if ($matches) {
             foreach ($u in $matches) {
-                $dn  = $u.DisplayName    ? $u.DisplayName    : 'N/A'
-                $eid = $u.EmployeeId     ? $u.EmployeeId     : 'N/A'
-                $em  = $u.Mail           ? $u.Mail           : 'N/A'
-                $dp  = $u.Department     ? $u.Department     : 'N/A'
+                if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
+                if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
+                if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
+                if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
                 Write-Host ($fmtData -f $dn,$eid,$em,$dp)
                 $totalFound++
             }
@@ -165,8 +162,8 @@ function Add-Members {
     Write-Host "Adding members to group (ObjectId: $GroupObjectId):" -ForegroundColor Cyan
 
     # Build initial membership cache
-    $existing    = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
-    $existingHash= @{}
+    $existing     = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
+    $existingHash = @{}
     foreach ($m in $existing) {
         if ($m.ObjectType -eq 'User') {
             try {
@@ -176,7 +173,7 @@ function Add-Members {
         }
     }
 
-    $added = @(); $already = @(); $failed = @()
+    $added   = @(); $already = @(); $failed = @()
     Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeId','Email','Department') -ForegroundColor Gray
     Write-Host ("=" * 140) -ForegroundColor Gray
 
@@ -187,10 +184,10 @@ function Add-Members {
             $failed += $id; continue
         }
 
-        $dn       = $u.DisplayName    ? $u.DisplayName    : 'N/A'
-        $eid      = $u.EmployeeId     ? $u.EmployeeId     : 'N/A'
-        $em       = $u.Mail           ? $u.Mail           : 'N/A'
-        $dp       = $u.Department     ? $u.Department     : 'N/A'
+        if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
+        if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
+        if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
+        if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
         $upn      = $u.UserPrincipalName
         $upnLower = $upn.ToLower()
 
@@ -232,8 +229,8 @@ function Remove-Members {
     Write-Host "Removing members from group (ObjectId: $GroupObjectId):" -ForegroundColor Cyan
 
     # Build initial membership cache
-    $existing    = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
-    $existingHash= @{}
+    $existing     = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
+    $existingHash = @{}
     foreach ($m in $existing) {
         if ($m.ObjectType -eq 'User') {
             try {
@@ -243,7 +240,7 @@ function Remove-Members {
         }
     }
 
-    $removed   = @(); $notMem = @(); $failed = @()
+    $removed   = @(); $notMem  = @(); $failed = @()
     Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeId','Email','Department') -ForegroundColor Gray
     Write-Host ("=" * 140) -ForegroundColor Gray
 
@@ -254,10 +251,10 @@ function Remove-Members {
             $failed += $id; continue
         }
 
-        $dn       = $u.DisplayName    ? $u.DisplayName    : 'N/A'
-        $eid      = $u.EmployeeId     ? $u.EmployeeId     : 'N/A'
-        $em       = $u.Mail           ? $u.Mail           : 'N/A'
-        $dp       = $u.Department     ? $u.Department     : 'N/A'
+        if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
+        if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
+        if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
+        if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
         $upn      = $u.UserPrincipalName
         $upnLower = $upn.ToLower()
 
