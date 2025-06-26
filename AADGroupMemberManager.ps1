@@ -1,392 +1,256 @@
 <#
 .SYNOPSIS
   Interactive Entra ID (Azure AD) group management by email/UPN on PowerShell 5.1,
-  with support for CSV import of EmailAddress column for add/remove operations.
-
-.DESCRIPTION
-  • Prompts for a valid Azure AD group name (DisplayName)
-  • Prompts until a valid action (1–3) is chosen:
-      1) Show Members
-      2) Add Members
-      3) Remove Members
-  • Show Members supports * or partial-match terms, with optional paging
-  • Add/Remove: supports manual input (space-separated emails/UPNs) or CSV file path
-      with column heading `EmailAddress`. Continues on errors.
-  • Outputs aligned columns for Status, DisplayName, EmployeeId, Email, Department
-  • Color-coded feedback + summary
+  with CSV import support for bulk Add/Remove.
 
 .NOTES
-  - Requires AzureAD module
-  - Will prompt to Connect-AzureAD if no session detected
-  - Run as an account with proper Azure AD permissions
+  • Requires AzureAD module (Install-Module AzureAD)
+  • Will prompt for Connect-AzureAD if not already connected
 #>
 
-param()  # prevent accidental output when dot-sourcing
+# Prevent output when dot-sourced
+param()
 
-# --- Import & ensure connection ---
+# --- Import & Connect ---
 if (-not (Get-Module -Name AzureAD)) {
     try { Import-Module AzureAD -ErrorAction Stop }
     catch {
-        Write-Host "AzureAD module not found. Install via 'Install-Module AzureAD'." -ForegroundColor Red
-        return
+        Write-Host "AzureAD module not found. Run 'Install-Module AzureAD' first." -ForegroundColor Red
+        exit
     }
 }
-
-function Ensure-AzureADConnection {
-    try { Get-AzureADTenantDetail -ErrorAction Stop | Out-Null }
-    catch {
-        Write-Host "Not connected to Azure AD. Prompting Connect-AzureAD..." -ForegroundColor Yellow
+function Ensure-Connection {
+    try {
+        Get-AzureADTenantDetail -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "Not connected to Azure AD; launching Connect-AzureAD..." -ForegroundColor Yellow
         Connect-AzureAD
     }
 }
 
 # --- Helpers ---
-function Get-AzureADGroupByName {
-    param([string]$DisplayName)
-    $filter = "displayName eq '$DisplayName'"
-    $groups = Get-AzureADGroup -Filter $filter
-    if (-not $groups) { return $null }
-    elseif ($groups.Count -eq 1) { return $groups[0] }
-    else {
-        Write-Host "Multiple groups named '$DisplayName':" -ForegroundColor Yellow
-        $i = 1
-        foreach ($g in $groups) {
-            Write-Host "[$i] DisplayName: $($g.DisplayName), Id: $($g.ObjectId), MailEnabled: $($g.MailEnabled)" -ForegroundColor Cyan
+function Get-GroupByName {
+    param([string]$Name)
+    $filter = "displayName eq '$Name'"
+    $g = Get-AzureADGroup -Filter $filter
+    if ($g.Count -eq 1) { return $g }
+    elseif ($g.Count -gt 1) {
+        Write-Host "Multiple groups named '$Name':" -ForegroundColor Yellow
+        $i=1; foreach ($grp in $g) {
+            Write-Host "[$i] $($grp.DisplayName) (Id: $($grp.ObjectId))"
             $i++
         }
-        $choice = Read-Host "Enter the number of the group to manage"
-        if ($choice -as [int] -and $choice -ge 1 -and $choice -le $groups.Count) {
-            return $groups[$choice - 1]
-        } else {
-            Write-Host "Invalid selection." -ForegroundColor Red
-            return $null
+        $sel = Read-Host "Enter number"
+        if ($sel -as [int] -and $sel -ge 1 -and $sel -le $g.Count) {
+            return $g[$sel-1]
         }
     }
+    return $null
 }
 
-function Get-AADUserByIdentifier {
-    param([string]$Identifier)
-    # GUID?
-    if ($Identifier -match '^[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}$') {
-        try { return Get-AzureADUser -ObjectId $Identifier -ErrorAction Stop }
-        catch { return $null }
+function Get-UserById {
+    param([string]$Id)
+    if ($Id -match '^[0-9a-f]{8}\-[0-9a-f]{4}\-[0-9a-f]{4}\-[0-9a-f]{4}\-[0-9a-f]{12}$') {
+        return Get-AzureADUser -ObjectId $Id -ErrorAction SilentlyContinue
     }
-    # Email or UPN
-    if ($Identifier -match '@') {
-        $u = Get-AzureADUser -Filter "userPrincipalName eq '$Identifier'" -ErrorAction SilentlyContinue
-        if ($u) { return $u }
-        return Get-AzureADUser -Filter "mail eq '$Identifier'" -ErrorAction SilentlyContinue
-    } else {
-        return Get-AzureADUser -Filter "userPrincipalName eq '$Identifier'" -ErrorAction SilentlyContinue
+    if ($Id -match '@') {
+        $u = Get-AzureADUser -Filter "userPrincipalName eq '$Id'" -ErrorAction SilentlyContinue
+        return $u ? $u : (Get-AzureADUser -Filter "mail eq '$Id'" -ErrorAction SilentlyContinue)
     }
+    return Get-AzureADUser -Filter "userPrincipalName eq '$Id'" -ErrorAction SilentlyContinue
 }
 
-# Column formatting
+# Formatting
 $fmtStatus = "{0,-15}"
 $fmtData   = "{0,-45} {1,-15} {2,-50} {3,-20}"
 $fmtRow    = $fmtStatus + " " + $fmtData
 
-# --- Core Functions ---
+# --- Core Operations ---
 function Show-Members {
-    param(
-        [string]   $GroupObjectId,
-        [string[]] $Terms
-    )
-    Write-Host "Retrieving all members..." -ForegroundColor Cyan
-    $allMembers = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
-    $allUsers = @()
-    foreach ($m in $allMembers) {
-        if ($m.ObjectType -eq 'User') {
-            try { $allUsers += Get-AzureADUser -ObjectId $m.ObjectId } catch {}
-        }
-    }
-
+    param($GroupId, [string[]]$Terms)
+    Write-Host "Loading members..." -ForegroundColor Cyan
+    $all = Get-AzureADGroupMember -ObjectId $GroupId -All $true | Where-Object ObjectType -eq 'User'
+    $users = $all | ForEach-Object { Get-AzureADUser -ObjectId $_.ObjectId }
     $showAll = $Terms -contains '*'
     if ($showAll) {
-        $ps = Read-Host "Enter page size for visual grouping (or press Enter for continuous)"
-        if ($ps -and ($ps -as [int]) -gt 0) { $pageSize = [int]$ps } else { $pageSize = 0 }
-        Write-Host "Streaming all members:" -ForegroundColor Cyan
-        Write-Host ($fmtData -f 'DisplayName','EmployeeId','Email','Department') -ForegroundColor Gray
-        Write-Host ("=" * 140) -ForegroundColor Gray
-        $count = 0
-        foreach ($u in $allUsers) {
-            if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
-            if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
-            if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
-            if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
+        $ps = Read-Host "Page size (or Enter for no paging)"
+        $size = ($ps -as [int] -gt 0) ? [int]$ps : 0
+        Write-Host ($fmtData -f 'DisplayName','EmployeeId','Mail','Department')
+        Write-Host ("="*140)
+        $c=0
+        foreach ($u in $users) {
+            $dn = $u.DisplayName   ; if (-not $dn) { $dn='N/A' }
+            $eid= $u.EmployeeId    ; if (-not $eid){ $eid='N/A'}
+            $em = $u.Mail          ; if (-not $em) { $em='N/A' }
+            $dp = $u.Department    ; if (-not $dp){ $dp='N/A'}
             Write-Host ($fmtData -f $dn,$eid,$em,$dp)
-            $count++
-            if ($pageSize -gt 0 -and ($count % $pageSize) -eq 0) {
-                Write-Host ("-" * 140) -ForegroundColor Gray
+            if ($size -gt 0 -and (++$c % $size) -eq 0) { Write-Host ("-"*140) }
+        }
+        Write-Host "Total: $c" -ForegroundColor Green
+    } else {
+        Write-Host ($fmtData -f 'DisplayName','EmployeeId','Mail','Department')
+        Write-Host ("="*140)
+        $found=0; $no=@()
+        foreach ($t in $Terms) {
+            $p=$t.ToLower()
+            $m = $users | Where-Object {
+                ($_.DisplayName -and $_.DisplayName.ToLower().Contains($p)) -or
+                ($_.EmployeeId  -and $_.EmployeeId.ToLower().Contains($p)) -or
+                ($_.Mail        -and $_.Mail.ToLower().Contains($p))
+            }
+            if ($m) {
+                foreach ($u in $m) {
+                    $dn=$u.DisplayName; if(-not $dn){$dn='N/A'}
+                    $eid=$u.EmployeeId;if(-not $eid){$eid='N/A'}
+                    $em=$u.Mail        ;if(-not $em){$em='N/A'}
+                    $dp=$u.Department  ;if(-not $dp){$dp='N/A'}
+                    Write-Host ($fmtData -f $dn,$eid,$em,$dp)
+                    $found++
+                }
+            } else {
+                Write-Host ($fmtStatus -f "✗ No match: $t") -ForegroundColor Yellow
+                $no += $t
             }
         }
-        Write-Host "Total members: $count" -ForegroundColor Green
-        return
+        Write-Host "Matched: $found" -ForegroundColor Green
+        if ($no) { Write-Host "No matches: $($no -join ', ')" -ForegroundColor Yellow }
     }
-
-    Write-Host "Searching members for terms: $($Terms -join ', ')" -ForegroundColor Cyan
-    Write-Host ($fmtData -f 'DisplayName','EmployeeId','Email','Department') -ForegroundColor Gray
-    Write-Host ("=" * 140) -ForegroundColor Gray
-    $totalFound = 0; $noMatch = @()
-    foreach ($term in $Terms) {
-        $p = $term.ToLower()
-        $matches = $allUsers | Where-Object {
-            ($_.DisplayName -and $_.DisplayName.ToLower().Contains($p)) -or
-            ($_.EmployeeId  -and $_.EmployeeId.ToLower().Contains($p)) -or
-            ($_.Mail        -and $_.Mail.ToLower().Contains($p))
-        }
-        if ($matches) {
-            foreach ($u in $matches) {
-                if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
-                if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
-                if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
-                if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
-                Write-Host ($fmtData -f $dn,$eid,$em,$dp)
-                $totalFound++
-            }
-        } else {
-            Write-Host ($fmtStatus -f "✗ No match: $term") -ForegroundColor Yellow
-            $noMatch += $term
-        }
-    }
-    Write-Host "=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Total matched: $totalFound" -ForegroundColor Green
-    if ($noMatch) { Write-Host "No matches for: $($noMatch -join ', ')" -ForegroundColor Yellow }
 }
 
 function Add-Members {
-    param(
-        [string]   $GroupObjectId,
-        [string[]] $Ids
-    )
-    Write-Host "Adding members to group (ObjectId: $GroupObjectId):" -ForegroundColor Cyan
+    param($GroupId, [string[]]$Ids)
+    Write-Host "Adding..." -ForegroundColor Cyan
+    $cache = @{}
+    Get-AzureADGroupMember -ObjectId $GroupId -All $true | Where-Object ObjectType -eq 'User' |
+      ForEach-Object { $u=Get-AzureADUser -ObjectId $_.ObjectId; $cache[$u.UserPrincipalName.ToLower()]=$u.ObjectId }
 
-    # Build initial membership cache
-    $existing     = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
-    $existingHash = @{}
-    foreach ($m in $existing) {
-        if ($m.ObjectType -eq 'User') {
-            try {
-                $u = Get-AzureADUser -ObjectId $m.ObjectId
-                $existingHash[$u.UserPrincipalName.ToLower()] = $u.ObjectId
-            } catch {}
-        }
-    }
-
-    $added   = @(); $already = @(); $failed = @()
-    Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeId','Email','Department') -ForegroundColor Gray
-    Write-Host ("=" * 140) -ForegroundColor Gray
-
+    $added=@(); $already=@(); $fail=@()
+    Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeId','Mail','Department')
+    Write-Host ("="*140)
     foreach ($id in $Ids) {
-        $u = Get-AADUserByIdentifier $id
+        $u=Get-UserById $id
         if (-not $u) {
             Write-Host ($fmtStatus -f "✗ Not found: $id") -ForegroundColor Yellow
-            $failed += $id; continue
+            $fail+=$id; continue
         }
-
-        if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
-        if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
-        if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
-        if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
-        $upn      = $u.UserPrincipalName
-        $upnLower = $upn.ToLower()
-
-        if ($existingHash.ContainsKey($upnLower)) {
+        $dn=$u.DisplayName; if(-not $dn){$dn='N/A'}
+        $eid=$u.EmployeeId;if(-not $eid){$eid='N/A'}
+        $em=$u.Mail        ;if(-not $em){$em='N/A'}
+        $dp=$u.Department  ;if(-not $dp){$dp='N/A'}
+        $upn=$u.UserPrincipalName.ToLower()
+        if ($cache.ContainsKey($upn)) {
             Write-Host ($fmtStatus -f "⚠ Already:      ") -NoNewline
             Write-Host ($fmtData -f $dn,$eid,$em,$dp) -ForegroundColor Yellow
-            $already += $id; continue
+            $already+=$id; continue
         }
-
         try {
-            Add-AzureADGroupMember -ObjectId $GroupObjectId -RefObjectId $u.ObjectId -ErrorAction Stop
+            Add-AzureADGroupMember -ObjectId $GroupId -RefObjectId $u.ObjectId -ErrorAction Stop
             Write-Host ($fmtStatus -f "✓ Added:        ") -NoNewline
             Write-Host ($fmtData -f $dn,$eid,$em,$dp) -ForegroundColor Green
-            $added += $id
-
-            # Update cache
-            $existingHash[$upnLower] = $u.ObjectId
-        }
-        catch {
-            $err = $_.Exception.Message
+            $added+=$id
+            $cache[$upn]=$u.ObjectId
+        } catch {
             Write-Host ($fmtStatus -f "✗ Failed:       ") -NoNewline
             Write-Host ($fmtData -f $dn,$eid,$em,$dp) -ForegroundColor Yellow
-            Write-Host "    Error: $err" -ForegroundColor DarkYellow
-            $failed += $id
+            $fail+=$id
         }
     }
-
-    Write-Host "=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Added:     $($added.Count)"   -ForegroundColor Green
-    Write-Host "Already:   $($already.Count)" -ForegroundColor Yellow
-    Write-Host "Failed:    $($failed.Count)"  -ForegroundColor Yellow
+    Write-Host "Added: $($added.Count)  Already: $($already.Count)  Failed: $($fail.Count)" -ForegroundColor Cyan
 }
 
 function Remove-Members {
-    param(
-        [string]   $GroupObjectId,
-        [string[]] $Ids
-    )
-    Write-Host "Removing members from group (ObjectId: $GroupObjectId):" -ForegroundColor Cyan
+    param($GroupId, [string[]]$Ids)
+    Write-Host "Removing..." -ForegroundColor Cyan
+    $cache=@{}
+    Get-AzureADGroupMember -ObjectId $GroupId -All $true | Where-Object ObjectType -eq 'User' |
+      ForEach-Object { $u=Get-AzureADUser -ObjectId $_.ObjectId; $cache[$u.UserPrincipalName.ToLower()]=$u.ObjectId }
 
-    # Build initial membership cache
-    $existing     = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
-    $existingHash = @{}
-    foreach ($m in $existing) {
-        if ($m.ObjectType -eq 'User') {
-            try {
-                $u = Get-AzureADUser -ObjectId $m.ObjectId
-                $existingHash[$u.UserPrincipalName.ToLower()] = $u.ObjectId
-            } catch {}
-        }
-    }
-
-    $removed   = @(); $notMem  = @(); $failed = @()
-    Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeId','Email','Department') -ForegroundColor Gray
-    Write-Host ("=" * 140) -ForegroundColor Gray
-
+    $rem=@(); $not=@(); $fail=@()
+    Write-Host ($fmtRow -f 'Status','DisplayName','EmployeeId','Mail','Department')
+    Write-Host ("="*140)
     foreach ($id in $Ids) {
-        $u = Get-AADUserByIdentifier $id
+        $u=Get-UserById $id
         if (-not $u) {
             Write-Host ($fmtStatus -f "✗ Not found: $id") -ForegroundColor Yellow
-            $failed += $id; continue
+            $fail+=$id; continue
         }
-
-        if ($u.DisplayName) { $dn = $u.DisplayName } else { $dn = 'N/A' }
-        if ($u.EmployeeId)  { $eid = $u.EmployeeId  } else { $eid = 'N/A' }
-        if ($u.Mail)        { $em = $u.Mail        } else { $em = 'N/A' }
-        if ($u.Department)  { $dp = $u.Department  } else { $dp = 'N/A' }
-        $upn      = $u.UserPrincipalName
-        $upnLower = $upn.ToLower()
-
-        if (-not $existingHash.ContainsKey($upnLower)) {
+        $dn=$u.DisplayName; if(-not $dn){$dn='N/A'}
+        $eid=$u.EmployeeId;if(-not $eid){$eid='N/A'}
+        $em=$u.Mail        ;if(-not $em){$em='N/A'}
+        $dp=$u.Department  ;if(-not $dp){$dp='N/A'}
+        $upn=$u.UserPrincipalName.ToLower()
+        if (-not $cache.ContainsKey($upn)) {
             Write-Host ($fmtStatus -f "⚠ Not mem:      ") -NoNewline
             Write-Host ($fmtData -f $dn,$eid,$em,$dp) -ForegroundColor Yellow
-            $notMem += $id; continue
+            $not+=$id; continue
         }
-
-        $memberId = $existingHash[$upnLower]
         try {
-            Remove-AzureADGroupMember -ObjectId $GroupObjectId -MemberId $memberId -ErrorAction Stop
+            Remove-AzureADGroupMember -ObjectId $GroupId -MemberId $cache[$upn] -ErrorAction Stop
             Write-Host ($fmtStatus -f "✓ Removed:      ") -NoNewline
             Write-Host ($fmtData -f $dn,$eid,$em,$dp) -ForegroundColor Green
-            $removed += $id
-
-            # Update cache
-            $existingHash.Remove($upnLower) | Out-Null
-        }
-        catch {
-            $err = $_.Exception.Message
+            $rem+=$id
+            $cache.Remove($upn) | Out-Null
+        } catch {
             Write-Host ($fmtStatus -f "✗ Failed:       ") -NoNewline
             Write-Host ($fmtData -f $dn,$eid,$em,$dp) -ForegroundColor Yellow
-            Write-Host "    Error: $err" -ForegroundColor DarkYellow
-            $failed += $id
+            $fail+=$id
         }
     }
-
-    Write-Host "=== Summary ===" -ForegroundColor Cyan
-    Write-Host "Removed:   $($removed.Count)"   -ForegroundColor Green
-    Write-Host "Not mem:   $($notMem.Count)"    -ForegroundColor Yellow
-    Write-Host "Failed:    $($failed.Count)"    -ForegroundColor Yellow
+    Write-Host "Removed: $($rem.Count)  Not mem: $($not.Count)  Failed: $($fail.Count)" -ForegroundColor Cyan
 }
 
-# --- CSV & Manual Input Helper ---
-function Get-IdentifiersFromInput {
-    param([string]$PromptMessage)
-
+# --- CSV/Manual Input Helper ---
+function Get-InputIds {
+    param([string]$msg)
     while ($true) {
-        $input = Read-Host $PromptMessage
-        if (-not $input) {
-            Write-Host "No input provided. Please enter space-separated emails/UPNs or a CSV file path." -ForegroundColor Yellow
-            continue
+        $v = Read-Host $msg
+        if (-not $v) { Write-Host "Input required." -ForegroundColor Yellow; continue }
+        $path = $v.Trim().Trim('"')
+        try { $rp=Resolve-Path $path -ErrorAction Stop; $path=$rp }
+        catch { $rp=$null }
+        if ($rp -and (Test-Path $path) -and ([IO.Path]::GetExtension($path) -ieq '.csv')) {
+            try { $data=Import-Csv $path } catch { Write-Host "CSV error." -ForegroundColor Red; continue }
+            if ($data[0].PSObject.Properties.Name -contains 'EmailAddress') {
+                $ids = $data | ForEach-Object { $_.EmailAddress.Trim() } | Where-Object { $_ }
+                if ($ids) { return $ids }
+            }
+            Write-Host "CSV needs column 'EmailAddress' with values." -ForegroundColor Yellow
+        } else {
+            $ids = $v -split '\s+' | Where-Object { $_.Trim() }
+            if ($ids) { return $ids }
         }
-
-        # Trim quotes/whitespace for "Copy as path"
-        $pathCandidate = $input.Trim().Trim('"').Trim()
-
-        # Resolve to full path if exists
-        try {
-            $full = Resolve-Path -Path $pathCandidate -ErrorAction Stop
-            $pathCandidate = $full.ProviderPath
-        } catch { $full = $null }
-
-        # If CSV, import EmailAddress column
-        if ($full -and (Test-Path $pathCandidate) -and ([IO.Path]::GetExtension($pathCandidate) -ieq '.csv')) {
-            try {
-                $rows = Import-Csv -Path $pathCandidate -ErrorAction Stop
-            } catch {
-                Write-Host "Failed to import CSV at '$pathCandidate'. Check permissions/format." -ForegroundColor Red
-                continue
-            }
-            if ($rows.Count -eq 0) {
-                Write-Host "CSV is empty. Needs at least one row." -ForegroundColor Yellow
-                continue
-            }
-            if (-not ($rows[0].PSObject.Properties.Name -contains 'EmailAddress')) {
-                Write-Host "CSV missing 'EmailAddress' column. Verify header." -ForegroundColor Red
-                continue
-            }
-            $ids = $rows | ForEach-Object { $_.EmailAddress.Trim() } | Where-Object { $_ }
-            if ($ids.Count -eq 0) {
-                Write-Host "No valid EmailAddress values found." -ForegroundColor Yellow
-                continue
-            }
-            return $ids
-        }
-
-        # Otherwise treat as manual list
-        $ids = $input -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-        if ($ids.Count -gt 0) {
-            return $ids
-        }
-
-        Write-Host "Couldn’t parse identifiers. Enter emails/UPNs or path to CSV." -ForegroundColor Yellow
     }
 }
 
-# --- Main Flow ---
+# --- Main ---
 function Main {
-    Ensure-AzureADConnection
-
-    # Group prompt
+    Ensure-Connection
     do {
-        $gName = Read-Host "Enter the Azure AD group DisplayName"
-        $gObj  = Get-AzureADGroupByName -DisplayName $gName
-        if (-not $gObj) {
-            Write-Host "Group '$gName' not found or ambiguous. Try again." -ForegroundColor Yellow
-            $ok = $false
-        } else { $ok = $true }
-    } until ($ok)
-    $groupId = $gObj.ObjectId
+        $g = Read-Host "Azure AD group DisplayName"
+        $grp = Get-GroupByName $g
+    } until ($grp)
+    $gid = $grp.ObjectId
 
-    # Action prompt
     do {
-        Write-Host "Select an action:" -ForegroundColor Cyan
-        Write-Host "  1) Show Members"
-        Write-Host "  2) Add Members"
-        Write-Host "  3) Remove Members"
-        $choice = Read-Host "Enter choice (1-3)"
-    } until ($choice -in '1','2','3')
+        Write-Host "1) Show  2) Add  3) Remove"
+        $c = Read-Host "Choose (1-3)"
+    } until ($c -in '1','2','3')
 
-    switch ($choice) {
+    switch ($c) {
         '1' {
-            $inp   = Read-Host "Enter search terms (space-separated), or * for all"
-            $terms = $inp -split '\s+' | Where-Object { $_.Trim() -ne '' }
-            Show-Members   -GroupObjectId $groupId -Terms $terms
+            $t=Read-Host "Terms (space-separated) or *"
+            Show-Members -GroupId $gid -Terms ($t -split '\s+' | Where-Object { $_ })
         }
         '2' {
-            $ids = Get-IdentifiersFromInput "Enter identifiers to ADD: space-separated emails/UPNs, or path to CSV with 'EmailAddress' column"
-            Add-Members    -GroupObjectId $groupId -Ids $ids
+            $ids=Get-InputIds "Provide emails/UPNs or CSV path"
+            Add-Members    -GroupId $gid -Ids $ids
         }
         '3' {
-            $ids = Get-IdentifiersFromInput "Enter identifiers to REMOVE: space-separated emails/UPNs, or path to CSV with 'EmailAddress' column"
-            Remove-Members -GroupObjectId $groupId -Ids $ids
+            $ids=Get-InputIds "Provide emails/UPNs or CSV path"
+            Remove-Members -GroupId $gid -Ids $ids
         }
     }
-
-    Write-Host "Operation completed." -ForegroundColor Green
+    Write-Host "Done." -ForegroundColor Green
 }
 
-# Invoke Main when run as script
-if ($MyInvocation.ScriptName) {
-    Main
-}
+if ($PSCommandPath) { Main }
