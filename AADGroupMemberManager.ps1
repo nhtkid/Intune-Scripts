@@ -1,5 +1,400 @@
 <#
 .SYNOPSIS
+    Azure AD Group Management Tool - Interactive PowerShell script for managing Azure Active Directory group memberships
+
+.DESCRIPTION
+    This script provides an interactive menu-driven interface for managing Azure AD group members.
+    After connecting to Azure AD and selecting a target group, choose from three main functions:
+
+    1. Show Members - View group members by typing * to show all members or enter a name to search 
+       for users with matching first name, last name, or display name.
+
+    2. Add Members - Add users to the group by pasting space-separated email addresses/UPNs into 
+       the console, or provide a local CSV file path with 'EmailAddress' column heading.
+
+    3. Remove Members - Remove users from the group by pasting space-separated email addresses/UPNs 
+       into the console, or provide a local CSV file path with 'EmailAddress' column heading.
+
+.PARAMETER None
+    This script runs interactively and prompts for all required parameters
+
+.EXAMPLE
+    PS> .\AAD-GroupManager.ps1
+    Launches the interactive group management tool
+
+.NOTES
+    Requirements: 
+    - PowerShell 5.1 or higher
+    - AzureAD PowerShell module
+    - Azure AD administrative permissions for target groups
+
+    CSV File Format:
+    EmailAddress
+    user1@domain.com
+    user2@domain.com
+
+.LINK
+    https://docs.microsoft.com/en-us/powershell/module/azuread/
+#>
+
+# Requires AzureAD PowerShell module
+# Compatible with PowerShell 5.1 ISE
+
+# Check if AzureAD module is available
+if (-not (Get-Module -ListAvailable -Name AzureAD)) {
+    Write-Host "AzureAD PowerShell module is not installed. Please install it using:" -ForegroundColor Red
+    Write-Host "Install-Module -Name AzureAD -Force" -ForegroundColor Yellow
+    exit
+}
+
+# Import AzureAD module
+Import-Module AzureAD -Force
+
+# Connect to Azure AD
+try {
+    Write-Host "Connecting to Azure AD..." -ForegroundColor Yellow
+    Connect-AzureAD | Out-Null
+    Write-Host "Successfully connected to Azure AD" -ForegroundColor Green
+}
+catch {
+    Write-Host "Failed to connect to Azure AD: $($_.Exception.Message)" -ForegroundColor Red
+    exit
+}
+
+# Function to get group by name
+function Get-AADGroupByName {
+    param([string]$GroupName)
+    
+    try {
+        $group = Get-AzureADGroup -Filter "DisplayName eq '$GroupName'"
+        if (-not $group) {
+            $group = Get-AzureADGroup -Filter "MailNickname eq '$GroupName'"
+        }
+        return $group
+    }
+    catch {
+        Write-Host "Error finding group: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Function to show group members
+function Show-GroupMembers {
+    param(
+        [string]$GroupObjectId,
+        [string]$SearchQuery = "*"
+    )
+    
+    try {
+        Write-Host "Retrieving group members..." -ForegroundColor Yellow
+        $members = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
+        
+        if ($members.Count -eq 0) {
+            Write-Host "No members found in the group." -ForegroundColor Yellow
+            return
+        }
+        
+        # Filter members based on search query
+        $filteredMembers = @()
+        
+        foreach ($member in $members) {
+            if ($member.ObjectType -eq "User") {
+                $user = Get-AzureADUser -ObjectId $member.ObjectId
+                
+                if ($SearchQuery -eq "*" -or 
+                    $user.DisplayName -like "*$SearchQuery*" -or
+                    $user.GivenName -like "*$SearchQuery*" -or
+                    $user.Surname -like "*$SearchQuery*") {
+                    $filteredMembers += $user
+                }
+            }
+        }
+        
+        # Display header
+        Write-Host ""
+        Write-Host ("{0,-30} {1,-15} {2,-35} {3,-20}" -f "DisplayName", "EmployeeID", "Mail", "Department") -ForegroundColor Cyan
+        Write-Host ("-" * 100) -ForegroundColor Cyan
+        
+        # Display members one by one (streamed)
+        $count = 0
+        foreach ($user in $filteredMembers) {
+            $displayName = if ($user.DisplayName) { $user.DisplayName } else { "N/A" }
+            $employeeId = if ($user.ExtensionProperty.employeeId) { $user.ExtensionProperty.employeeId } else { "N/A" }
+            $mail = if ($user.Mail) { $user.Mail } else { $user.UserPrincipalName }
+            $department = if ($user.Department) { $user.Department } else { "N/A" }
+            
+            Write-Host ("{0,-30} {1,-15} {2,-35} {3,-20}" -f 
+                $displayName.Substring(0, [Math]::Min(29, $displayName.Length)),
+                $employeeId.Substring(0, [Math]::Min(14, $employeeId.Length)),
+                $mail.Substring(0, [Math]::Min(34, $mail.Length)),
+                $department.Substring(0, [Math]::Min(19, $department.Length))
+            ) -ForegroundColor White
+            
+            $count++
+            Start-Sleep -Milliseconds 100  # Small delay for streaming effect
+        }
+        
+        Write-Host ""
+        Write-Host "$count members found" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Error retrieving members: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Function to add members to group
+function Add-GroupMembers {
+    param(
+        [string]$GroupObjectId,
+        [array]$EmailAddresses
+    )
+    
+    $addedCount = 0
+    $failedMembers = @()
+    
+    Write-Host "Adding members to group..." -ForegroundColor Yellow
+    Write-Host ""
+    
+    foreach ($email in $EmailAddresses) {
+        $email = $email.Trim()
+        if ([string]::IsNullOrWhiteSpace($email)) { continue }
+        
+        try {
+            # Find user by email or UPN
+            $user = Get-AzureADUser -Filter "Mail eq '$email' or UserPrincipalName eq '$email'"
+            
+            if ($user) {
+                # Check if user is already a member
+                $existingMember = Get-AzureADGroupMember -ObjectId $GroupObjectId | Where-Object { $_.ObjectId -eq $user.ObjectId }
+                
+                if ($existingMember) {
+                    Write-Host "Already member - $email" -ForegroundColor Yellow
+                }
+                else {
+                    Add-AzureADGroupMember -ObjectId $GroupObjectId -RefObjectId $user.ObjectId
+                    Write-Host "Added - $email" -ForegroundColor Green
+                    $addedCount++
+                }
+            }
+            else {
+                Write-Host "Failed - $email (User not found)" -ForegroundColor Red
+                $failedMembers += "$email (User not found)"
+            }
+        }
+        catch {
+            Write-Host "Failed - $email ($($_.Exception.Message))" -ForegroundColor Red
+            $failedMembers += "$email ($($_.Exception.Message))"
+        }
+        
+        Start-Sleep -Milliseconds 200  # Small delay for streaming effect
+    }
+    
+    # Summary
+    Write-Host ""
+    Write-Host "$addedCount members added" -ForegroundColor Green
+    
+    if ($failedMembers.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Failed to add the following members:" -ForegroundColor Red
+        foreach ($failed in $failedMembers) {
+            Write-Host "  - $failed" -ForegroundColor Red
+        }
+    }
+}
+
+# Function to remove members from group
+function Remove-GroupMembers {
+    param(
+        [string]$GroupObjectId,
+        [array]$EmailAddresses
+    )
+    
+    $removedCount = 0
+    $failedMembers = @()
+    
+    Write-Host "Removing members from group..." -ForegroundColor Yellow
+    Write-Host ""
+    
+    foreach ($email in $EmailAddresses) {
+        $email = $email.Trim()
+        if ([string]::IsNullOrWhiteSpace($email)) { continue }
+        
+        try {
+            # Find user by email or UPN
+            $user = Get-AzureADUser -Filter "Mail eq '$email' or UserPrincipalName eq '$email'"
+            
+            if ($user) {
+                # Check if user is a member
+                $existingMember = Get-AzureADGroupMember -ObjectId $GroupObjectId | Where-Object { $_.ObjectId -eq $user.ObjectId }
+                
+                if ($existingMember) {
+                    Remove-AzureADGroupMember -ObjectId $GroupObjectId -MemberId $user.ObjectId
+                    Write-Host "Removed - $email" -ForegroundColor Green
+                    $removedCount++
+                }
+                else {
+                    Write-Host "Failed - $email (Not a member)" -ForegroundColor Yellow
+                    $failedMembers += "$email (Not a member)"
+                }
+            }
+            else {
+                Write-Host "Failed - $email (User not found)" -ForegroundColor Red
+                $failedMembers += "$email (User not found)"
+            }
+        }
+        catch {
+            Write-Host "Failed - $email ($($_.Exception.Message))" -ForegroundColor Red
+            $failedMembers += "$email ($($_.Exception.Message))"
+        }
+        
+        Start-Sleep -Milliseconds 200  # Small delay for streaming effect
+    }
+    
+    # Summary
+    Write-Host ""
+    Write-Host "$removedCount members removed" -ForegroundColor Green
+    
+    if ($failedMembers.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Failed to remove the following members:" -ForegroundColor Red
+        foreach ($failed in $failedMembers) {
+            Write-Host "  - $failed" -ForegroundColor Red
+        }
+    }
+}
+
+# Function to get email addresses from user input
+function Get-EmailAddressesFromInput {
+    Write-Host ""
+    Write-Host "Enter email addresses/UPNs separated by spaces, or provide path to CSV file:" -ForegroundColor Cyan
+    Write-Host "(For CSV file: enter full path like C:\temp\users.csv)" -ForegroundColor Gray
+    $input = Read-Host "Input"
+    
+    if ($input -like "*.csv") {
+        # Handle CSV file
+        if (Test-Path $input) {
+            try {
+                $csvData = Import-Csv -Path $input
+                if ($csvData[0].PSObject.Properties.Name -contains "EmailAddress") {
+                    return $csvData.EmailAddress
+                }
+                else {
+                    Write-Host "CSV file must contain 'EmailAddress' column" -ForegroundColor Red
+                    return @()
+                }
+            }
+            catch {
+                Write-Host "Error reading CSV file: $($_.Exception.Message)" -ForegroundColor Red
+                return @()
+            }
+        }
+        else {
+            Write-Host "CSV file not found: $input" -ForegroundColor Red
+            return @()
+        }
+    }
+    else {
+        # Handle space-separated email addresses
+        return $input -split '\s+' | Where-Object { $_ -ne "" }
+    }
+}
+
+# Main script execution
+Write-Host "=== Azure AD Group Management Tool ===" -ForegroundColor Cyan
+Write-Host ""
+
+# Get group name from user
+$groupName = Read-Host "Enter the group name (Display Name or Mail Nickname)"
+
+if ([string]::IsNullOrWhiteSpace($groupName)) {
+    Write-Host "Group name cannot be empty" -ForegroundColor Red
+    exit
+}
+
+# Find the group
+$group = Get-AADGroupByName -GroupName $groupName
+
+if (-not $group) {
+    Write-Host "Group '$groupName' not found" -ForegroundColor Red
+    exit
+}
+
+Write-Host "Found group: $($group.DisplayName)" -ForegroundColor Green
+Write-Host "Group ID: $($group.ObjectId)" -ForegroundColor Gray
+Write-Host ""
+
+# Main menu loop
+do {
+    Write-Host "=== Options ===" -ForegroundColor Cyan
+    Write-Host "1. Show members"
+    Write-Host "2. Add members"
+    Write-Host "3. Remove members"
+    Write-Host "4. Exit"
+    Write-Host ""
+    
+    $choice = Read-Host "Select an option (1-4)"
+    
+    switch ($choice) {
+        "1" {
+            Write-Host ""
+            Write-Host "Enter search criteria:" -ForegroundColor Cyan
+            Write-Host "(Type * to show all members, or enter name to search)" -ForegroundColor Gray
+            $searchQuery = Read-Host "Search"
+            
+            if ([string]::IsNullOrWhiteSpace($searchQuery)) {
+                $searchQuery = "*"
+            }
+            
+            Show-GroupMembers -GroupObjectId $group.ObjectId -SearchQuery $searchQuery
+        }
+        
+        "2" {
+            $emailAddresses = Get-EmailAddressesFromInput
+            if ($emailAddresses.Count -gt 0) {
+                Add-GroupMembers -GroupObjectId $group.ObjectId -EmailAddresses $emailAddresses
+            }
+            else {
+                Write-Host "No email addresses provided" -ForegroundColor Yellow
+            }
+        }
+        
+        "3" {
+            $emailAddresses = Get-EmailAddressesFromInput
+            if ($emailAddresses.Count -gt 0) {
+                Remove-GroupMembers -GroupObjectId $group.ObjectId -EmailAddresses $emailAddresses
+            }
+            else {
+                Write-Host "No email addresses provided" -ForegroundColor Yellow
+            }
+        }
+        
+        "4" {
+            Write-Host "Exiting..." -ForegroundColor Yellow
+            break
+        }
+        
+        default {
+            Write-Host "Invalid option. Please select 1-4." -ForegroundColor Red
+        }
+    }
+    
+    if ($choice -ne "4") {
+        Write-Host ""
+        Write-Host "Press any key to continue..." -ForegroundColor Gray
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        Clear-Host
+        Write-Host "=== Azure AD Group Management Tool ===" -ForegroundColor Cyan
+        Write-Host "Working with group: $($group.DisplayName)" -ForegroundColor Green
+        Write-Host ""
+    }
+    
+} while ($choice -ne "4")
+
+Write-Host "Script completed." -ForegroundColor Green
+
+
+<#
+.SYNOPSIS
   Interactive Entra ID (Azure AD) group management by email/UPN on PowerShell 5.1,
   with CSV import support for bulk Add/Remove (with column headding EmailAddress).
 
