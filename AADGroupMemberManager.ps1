@@ -66,9 +66,14 @@ function Get-AADGroupByName {
     param([string]$GroupName)
     
     try {
-        $group = Get-AzureADGroup -Filter "DisplayName eq '$GroupName'"
+        # Try exact match first
+        $group = Get-AzureADGroup -All $true | Where-Object { $_.DisplayName -eq $GroupName }
         if (-not $group) {
-            $group = Get-AzureADGroup -Filter "MailNickname eq '$GroupName'"
+            $group = Get-AzureADGroup -All $true | Where-Object { $_.MailNickname -eq $GroupName }
+        }
+        # If still not found, try partial match
+        if (-not $group) {
+            $group = Get-AzureADGroup -All $true | Where-Object { $_.DisplayName -like "*$GroupName*" }
         }
         return $group
     }
@@ -78,7 +83,373 @@ function Get-AADGroupByName {
     }
 }
 
-# Function to show group members
+# Function to find user by email or UPN
+function Find-AADUser {
+    param([string]$EmailOrUPN)
+    
+    try {
+        # Try multiple methods to find the user
+        $user = $null
+        
+        # Method 1: Direct ObjectId lookup if it looks like a GUID
+        if ($EmailOrUPN -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+function Show-GroupMembers {
+    param(
+        [string]$GroupObjectId,
+        [string]$SearchQuery = "*"
+    )
+    
+    try {
+        Write-Host "Retrieving group members..." -ForegroundColor Yellow
+        $members = Get-AzureADGroupMember -ObjectId $GroupObjectId -All $true
+        
+        if ($members.Count -eq 0) {
+            Write-Host "No members found in the group." -ForegroundColor Yellow
+            return
+        }
+        
+        # Filter members based on search query
+        $filteredMembers = @()
+        
+        foreach ($member in $members) {
+            if ($member.ObjectType -eq "User") {
+                $user = Get-AzureADUser -ObjectId $member.ObjectId
+                
+                if ($SearchQuery -eq "*" -or 
+                    $user.DisplayName -like "*$SearchQuery*" -or
+                    $user.GivenName -like "*$SearchQuery*" -or
+                    $user.Surname -like "*$SearchQuery*") {
+                    $filteredMembers += $user
+                }
+            }
+        }
+        
+        # Display header
+        Write-Host ""
+        Write-Host ("{0,-30} {1,-15} {2,-35} {3,-20}" -f "DisplayName", "EmployeeID", "Mail", "Department") -ForegroundColor Cyan
+        Write-Host ("-" * 100) -ForegroundColor Cyan
+        
+        # Display members one by one (streamed)
+        $count = 0
+        foreach ($user in $filteredMembers) {
+            $displayName = if ($user.DisplayName) { $user.DisplayName } else { "N/A" }
+            $employeeId = if ($user.ExtensionProperty.employeeId) { $user.ExtensionProperty.employeeId } else { "N/A" }
+            $mail = if ($user.Mail) { $user.Mail } else { $user.UserPrincipalName }
+            $department = if ($user.Department) { $user.Department } else { "N/A" }
+            
+            Write-Host ("{0,-30} {1,-15} {2,-35} {3,-20}" -f 
+                $displayName.Substring(0, [Math]::Min(29, $displayName.Length)),
+                $employeeId.Substring(0, [Math]::Min(14, $employeeId.Length)),
+                $mail.Substring(0, [Math]::Min(34, $mail.Length)),
+                $department.Substring(0, [Math]::Min(19, $department.Length))
+            ) -ForegroundColor White
+            
+            $count++
+            Start-Sleep -Milliseconds 100  # Small delay for streaming effect
+        }
+        
+        Write-Host ""
+        Write-Host "$count members found" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Error retrieving members: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Function to add members to group
+function Add-GroupMembers {
+    param(
+        [string]$GroupObjectId,
+        [array]$EmailAddresses
+    )
+    
+    $addedCount = 0
+    $failedMembers = @()
+    
+    Write-Host "Adding members to group..." -ForegroundColor Yellow
+    Write-Host ""
+    
+    foreach ($email in $EmailAddresses) {
+        $email = $email.Trim()
+        if ([string]::IsNullOrWhiteSpace($email)) { continue }
+        
+        try {
+            # Find user using improved search function
+            $user = Find-AADUser -EmailOrUPN $email
+            
+            if ($user) {
+                # Check if user is already a member
+                $existingMember = Get-AzureADGroupMember -ObjectId $GroupObjectId | Where-Object { $_.ObjectId -eq $user.ObjectId }
+                
+                if ($existingMember) {
+                    Write-Host "Already member - $email" -ForegroundColor Yellow
+                }
+                else {
+                    Add-AzureADGroupMember -ObjectId $GroupObjectId -RefObjectId $user.ObjectId
+                    Write-Host "Added - $email" -ForegroundColor Green
+                    $addedCount++
+                }
+            }
+            else {
+                Write-Host "Failed - $email (User not found)" -ForegroundColor Red
+                $failedMembers += "$email (User not found)"
+            }
+        }
+        catch {
+            Write-Host "Failed - $email ($($_.Exception.Message))" -ForegroundColor Red
+            $failedMembers += "$email ($($_.Exception.Message))"
+        }
+        
+        Start-Sleep -Milliseconds 200  # Small delay for streaming effect
+    }
+    
+    # Summary
+    Write-Host ""
+    Write-Host "$addedCount members added" -ForegroundColor Green
+    
+    if ($failedMembers.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Failed to add the following members:" -ForegroundColor Red
+        foreach ($failed in $failedMembers) {
+            Write-Host "  - $failed" -ForegroundColor Red
+        }
+    }
+}
+
+# Function to remove members from group
+function Remove-GroupMembers {
+    param(
+        [string]$GroupObjectId,
+        [array]$EmailAddresses
+    )
+    
+    $removedCount = 0
+    $failedMembers = @()
+    
+    Write-Host "Removing members from group..." -ForegroundColor Yellow
+    Write-Host ""
+    
+    foreach ($email in $EmailAddresses) {
+        $email = $email.Trim()
+        if ([string]::IsNullOrWhiteSpace($email)) { continue }
+        
+        try {
+            # Find user using improved search function
+            $user = Find-AADUser -EmailOrUPN $email
+            
+            if ($user) {
+                # Check if user is a member
+                $existingMember = Get-AzureADGroupMember -ObjectId $GroupObjectId | Where-Object { $_.ObjectId -eq $user.ObjectId }
+                
+                if ($existingMember) {
+                    Remove-AzureADGroupMember -ObjectId $GroupObjectId -MemberId $user.ObjectId
+                    Write-Host "Removed - $email" -ForegroundColor Green
+                    $removedCount++
+                }
+                else {
+                    Write-Host "Failed - $email (Not a member)" -ForegroundColor Yellow
+                    $failedMembers += "$email (Not a member)"
+                }
+            }
+            else {
+                Write-Host "Failed - $email (User not found)" -ForegroundColor Red
+                $failedMembers += "$email (User not found)"
+            }
+        }
+        catch {
+            Write-Host "Failed - $email ($($_.Exception.Message))" -ForegroundColor Red
+            $failedMembers += "$email ($($_.Exception.Message))"
+        }
+        
+        Start-Sleep -Milliseconds 200  # Small delay for streaming effect
+    }
+    
+    # Summary
+    Write-Host ""
+    Write-Host "$removedCount members removed" -ForegroundColor Green
+    
+    if ($failedMembers.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Failed to remove the following members:" -ForegroundColor Red
+        foreach ($failed in $failedMembers) {
+            Write-Host "  - $failed" -ForegroundColor Red
+        }
+    }
+}
+
+# Function to get email addresses from user input
+function Get-EmailAddressesFromInput {
+    Write-Host ""
+    Write-Host "Enter email addresses/UPNs separated by spaces, or provide path to CSV file:" -ForegroundColor Cyan
+    Write-Host "(For CSV file: enter full path like C:\temp\users.csv)" -ForegroundColor Gray
+    $input = Read-Host "Input"
+    
+    if ($input -like "*.csv") {
+        # Handle CSV file
+        if (Test-Path $input) {
+            try {
+                $csvData = Import-Csv -Path $input
+                $columnNames = $csvData[0].PSObject.Properties.Name
+                
+                if ($columnNames -contains "EmailAddress") {
+                    Write-Host "Using EmailAddress column from CSV" -ForegroundColor Green
+                    return $csvData.EmailAddress | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                }
+                elseif ($columnNames -contains "Email") {
+                    Write-Host "Using Email column from CSV" -ForegroundColor Green  
+                    return $csvData.Email | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                }
+                elseif ($columnNames -contains "Mail") {
+                    Write-Host "Using Mail column from CSV" -ForegroundColor Green
+                    return $csvData.Mail | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                }
+                elseif ($columnNames -contains "UserPrincipalName") {
+                    Write-Host "Using UserPrincipalName column from CSV" -ForegroundColor Green
+                    return $csvData.UserPrincipalName | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                }
+                else {
+                    Write-Host "Available columns in CSV: $($columnNames -join ', ')" -ForegroundColor Yellow
+                    Write-Host "CSV file must contain one of these columns: EmailAddress, Email, Mail, or UserPrincipalName" -ForegroundColor Red
+                    return @()
+                }
+            }
+            catch {
+                Write-Host "Error reading CSV file: $($_.Exception.Message)" -ForegroundColor Red
+                return @()
+            }
+        }
+        else {
+            Write-Host "CSV file not found: $input" -ForegroundColor Red
+            return @()
+        }
+    }
+    else {
+        # Handle space-separated email addresses
+        return $input -split '\s+' | Where-Object { $_ -ne "" }
+    }
+}
+
+# Main script execution
+Write-Host "=== Azure AD Group Management Tool ===" -ForegroundColor Cyan
+Write-Host ""
+
+# Get group name from user
+$groupName = Read-Host "Please provide the group name"
+
+if ([string]::IsNullOrWhiteSpace($groupName)) {
+    Write-Host "Group name cannot be empty" -ForegroundColor Red
+    exit
+}
+
+# Find the group
+$group = Get-AADGroupByName -GroupName $groupName
+
+if (-not $group) {
+    Write-Host "Group '$groupName' not found" -ForegroundColor Red
+    exit
+}
+
+Write-Host "Found group: $($group.DisplayName)" -ForegroundColor Green
+Write-Host "Group ID: $($group.ObjectId)" -ForegroundColor Gray
+Write-Host ""
+
+# Main menu loop
+do {
+    Write-Host "=== Options ===" -ForegroundColor Cyan
+    Write-Host "1. Show members"
+    Write-Host "2. Add members"
+    Write-Host "3. Remove members"
+    Write-Host "4. Exit"
+    Write-Host ""
+    
+    $choice = Read-Host "Select an option (1-4)"
+    
+    switch ($choice) {
+        "1" {
+            Write-Host ""
+            Write-Host "Enter to show all members or type a name to search:" -ForegroundColor Cyan
+            $searchQuery = Read-Host
+            
+            if ([string]::IsNullOrWhiteSpace($searchQuery)) {
+                $searchQuery = "*"
+            }
+            
+            Show-GroupMembers -GroupObjectId $group.ObjectId -SearchQuery $searchQuery
+        }
+        
+        "2" {
+            $emailAddresses = Get-EmailAddressesFromInput
+            if ($emailAddresses.Count -gt 0) {
+                Add-GroupMembers -GroupObjectId $group.ObjectId -EmailAddresses $emailAddresses
+            }
+            else {
+                Write-Host "No email addresses provided" -ForegroundColor Yellow
+            }
+        }
+        
+        "3" {
+            $emailAddresses = Get-EmailAddressesFromInput
+            if ($emailAddresses.Count -gt 0) {
+                Remove-GroupMembers -GroupObjectId $group.ObjectId -EmailAddresses $emailAddresses
+            }
+            else {
+                Write-Host "No email addresses provided" -ForegroundColor Yellow
+            }
+        }
+        
+        "4" {
+            Write-Host "Exiting..." -ForegroundColor Yellow
+            break
+        }
+        
+        default {
+            Write-Host "Invalid option. Please select 1-4." -ForegroundColor Red
+        }
+    }
+    
+    if ($choice -ne "4") {
+        Write-Host ""
+        Write-Host "Press any key to continue..." -ForegroundColor Gray
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        Clear-Host
+        Write-Host "=== Azure AD Group Management Tool ===" -ForegroundColor Cyan
+        Write-Host "Working with group: $($group.DisplayName)" -ForegroundColor Green
+        Write-Host ""
+    }
+    
+} while ($choice -ne "4")
+
+Write-Host "Script completed." -ForegroundColor Green) {
+            try {
+                $user = Get-AzureADUser -ObjectId $EmailOrUPN
+            } catch { }
+        }
+        
+        # Method 2: Try UserPrincipalName lookup
+        if (-not $user) {
+            try {
+                $user = Get-AzureADUser -ObjectId $EmailOrUPN
+            } catch { }
+        }
+        
+        # Method 3: Search all users if direct lookup failed
+        if (-not $user) {
+            $allUsers = Get-AzureADUser -All $true
+            $user = $allUsers | Where-Object { 
+                $_.UserPrincipalName -eq $EmailOrUPN -or 
+                $_.Mail -eq $EmailOrUPN -or
+                $_.ProxyAddresses -contains "smtp:$EmailOrUPN" -or
+                $_.ProxyAddresses -contains "SMTP:$EmailOrUPN"
+            } | Select-Object -First 1
+        }
+        
+        return $user
+    }
+    catch {
+        Write-Host "Error searching for user $EmailOrUPN : $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
 function Show-GroupMembers {
     param(
         [string]$GroupObjectId,
