@@ -137,3 +137,32 @@ In this case, the URL schemes are:
 ---
 
 ✅ You now have a repeatable process to extract iOS app URL schemes and configure Intune MAM exemptions to ensure seamless SSO handoff between Edge and unmanaged apps.
+
+
+## Security considerations
+
+Exempting apps from Intune MAM introduces trade-offs:
+
+What’s allowed: Only the token handoff from Edge (or another protected app) to the exempted app, via its unique URL scheme.
+
+What’s not enforced: Once data enters the exempted app, Intune protections no longer apply. For example, copy/paste restrictions or data encryption at rest.
+
+Risks:
+
+The exempted app could expose data outside managed boundaries.
+
+If a malicious app could somehow hijack the scheme (unlikely on iOS due to bundle signing), it might intercept tokens.
+
+Best practice:
+
+Only exempt trusted, business-critical apps.
+
+Keep the exemption list as small as possible.
+
+Involve your security/compliance team for approval.
+
+📖 Microsoft also cautions that this method should be used only when necessary: App protection policies exceptions
+
+## Summary
+
+By extracting the IPA and inspecting Info.plist, you can identify an app’s URL schemes and configure them as exemptions in Intune App Protection Policies. This allows authentication flows (via Edge) to return tokens properly to apps that don’t support Intune MAM. However, exemptions reduce enforcement, so they should be applied carefully and only for trusted apps.
