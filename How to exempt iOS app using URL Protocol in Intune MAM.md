@@ -14,7 +14,6 @@ Some apps:
 
 Without exemption, the **authentication token** returned from the protected browser cannot be passed back into the unmanaged app, leading to SSO errors (e.g., HTTP 403 Forbidden). By exempting the app’s URL scheme, Intune allows the token handoff back into the app.
 
-https://learn.microsoft.com/en-us/intune/intune-service/apps/app-protection-policies-exception
 ---
 
 ## Prerequisites
@@ -161,7 +160,7 @@ Keep the exemption list as small as possible.
 
 Involve your security/compliance team for approval.
 
-📖 Microsoft also cautions that this method should be used only when necessary: App protection policies exceptions
+📖 Microsoft also cautions that this method should be used only when necessary: [App protection policies exceptions](https://learn.microsoft.com/en-us/intune/intune-service/apps/app-protection-policies-exception)
 
 ## Summary
 
