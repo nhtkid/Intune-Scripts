@@ -8,11 +8,12 @@ This guide explains how to extract **URL protocols (schemes)** from an iOS app I
 
 Some apps:
 
-* Do **not support Intune MAM SDK** (cannot be wrapped/protected by Intune).
+ Do **not support Intune MAM SDK** (cannot be wrapped/protected by Intune).
 * Are deployed as **MDM-managed apps** instead.
 * Use an **external browser (e.g., Edge)** for completing authentication (SSO).
 
 Without exemption, the **authentication token** returned from the protected browser cannot be passed back into the unmanaged app, leading to SSO errors (e.g., HTTP 403 Forbidden). By exempting the app’s URL scheme, Intune allows the token handoff back into the app.
+
 https://learn.microsoft.com/en-us/intune/intune-service/apps/app-protection-policies-exception
 ---
 
